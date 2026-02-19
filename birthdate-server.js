@@ -1,9 +1,9 @@
 // birthdate-server.js - Node.js Backend for Roblox Birthdate Changer
-// Install dependencies: npm install express cors https-proxy-agent
+// Install dependencies: npm install express cors undici
 
 const express = require("express");
 const cors = require("cors");
-const { HttpsProxyAgent } = require("https-proxy-agent");
+const { fetch: undiciFetch, ProxyAgent } = require("undici");
 const app = express();
 
 app.use(cors());
@@ -12,14 +12,14 @@ app.use(express.static("public")); // Serve HTML file from public folder
 
 // Proxy configuration
 const PROXY_URL = "http://td-customer-TRbiBG8:rhmOH2MsgO@pd7qpqyj.pr.thordata.net:9999";
-const proxyAgent = new HttpsProxyAgent(PROXY_URL);
+const proxyAgent = new ProxyAgent(PROXY_URL);
 
 // Helper function to make requests to Roblox
 async function robloxRequest(url, options = {}) {
     console.log(`[Roblox Request] ${options.method || "GET"} ${url}`);
-    const response = await fetch(url, {
+    const response = await undiciFetch(url, {
         ...options,
-        agent: proxyAgent,
+        dispatcher: proxyAgent,
         headers: {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
