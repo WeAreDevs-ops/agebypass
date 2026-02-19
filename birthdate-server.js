@@ -75,7 +75,7 @@ app.post("/api/change-birthdate", async (req, res) => {
                 method: "POST",
                 headers: {
                     Cookie: roblosecurity,
-                    "x-csrf-token"f: csrfToken,
+                    "x-csrf-token": csrfToken,
                 },
                 body: JSON.stringify({
                     birthMonth: parseInt(birthMonth),
