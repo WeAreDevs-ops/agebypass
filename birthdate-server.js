@@ -56,7 +56,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://users.roblox.com/v1/description", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -123,9 +123,12 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         const challengeId = changeRequest.headers.get("rblx-challenge-id");
         const challengeType = changeRequest.headers.get("rblx-challenge-type");
-        const challengeMetadata = changeRequest.headers.get(
-            "rblx-challenge-metadata",
-        );
+        const challengeMetadata = changeRequest.headers.get("rblx-challenge-metadata");
+
+        const step2Headers = {};
+        changeRequest.headers.forEach((value, key) => { step2Headers[key] = value; });
+        console.log(`[Step 2 Response Headers] ${JSON.stringify(step2Headers)}`);
+        logs.push(`   Step 2 Response Headers: ${JSON.stringify(step2Headers)}`);
 
         if (!challengeId || !challengeType || !challengeMetadata) {
             const errorText = await changeRequest.text();
@@ -312,10 +315,14 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         if (retryBirthdate.status !== 200) {
             const errorText = await retryBirthdate.text();
+            const step6Headers = {};
+            retryBirthdate.headers.forEach((value, key) => { step6Headers[key] = value; });
             console.error(`[Error] Step 6 failed: ${retryBirthdate.status} - ${errorText}`);
+            console.log(`[Step 6 Response Headers] ${JSON.stringify(step6Headers)}`);
             logs.push("❌ Step 6 failed");
             logs.push(`   Status: ${retryBirthdate.status}`);
             logs.push(`   Response: ${errorText}`);
+            logs.push(`   Headers: ${JSON.stringify(step6Headers)}`);
             return res.status(500).json({
                 success: false,
                 error: "Birthdate change failed after verification",
