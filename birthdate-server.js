@@ -230,6 +230,14 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 5: Complete Challenge with Verification Token
         logs.push("🔄 Step 5: Completing challenge with verification token...");
 
+        // Use the full metadata from step 3 and inject the verification token
+        const finalMetadata = {
+            ...metadata, // Spread all fields from step 3
+            verificationToken: verificationToken // Add/replace verificationToken from step 4
+        };
+
+        logs.push(`   Sending full metadata with ${Object.keys(finalMetadata).length} fields`);
+
         const finalChallenge = await robloxRequest(
             "https://apis.roblox.com/challenge/v1/continue",
             {
@@ -240,10 +248,8 @@ app.post("/api/change-birthdate", async (req, res) => {
                 },
                 body: JSON.stringify({
                     challengeId: challenge1Data.challengeId,
-                    challengeType: "twostepverification",
-                    challengeMetadata: JSON.stringify({
-                        verificationToken: verificationToken,
-                    }),
+                    challengeType: challenge1Data.challengeType,
+                    challengeMetadata: JSON.stringify(finalMetadata),
                 }),
             },
         );
