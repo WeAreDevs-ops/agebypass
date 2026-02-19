@@ -47,7 +47,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -179,6 +179,8 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   User ID: ${userId}`);
         logs.push(`   Inner Challenge ID: ${innerChallengeId}`);
+        console.log(`[Step 3 Parsed Metadata] ${JSON.stringify(metadata)}`);
+        logs.push(`   Full Metadata: ${JSON.stringify(metadata)}`);
 
         // STEP 4: Verify Password
         logs.push("🔄 Step 4: Verifying password...");
@@ -287,17 +289,8 @@ app.post("/api/change-birthdate", async (req, res) => {
             {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json",
                     Cookie: roblosecurity,
                     "x-csrf-token": csrfToken,
-                    "rblx-challenge-id": challenge1Data.challengeId,
-                    "rblx-challenge-type": "twostepverification",
-                    "rblx-challenge-metadata": JSON.stringify({
-                        challengeId: innerChallengeId,
-                        verificationToken: verificationToken,
-                        rememberDevice: false,
-                        actionType: "Generic",
-                    }),
                 },
                 body: JSON.stringify({
                     birthMonth: parseInt(birthMonth),
