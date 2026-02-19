@@ -47,7 +47,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -267,6 +267,16 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
+        const finalChallengeData = await finalChallenge.json();
+        const finalChallengeHeaders = {};
+        finalChallenge.headers.forEach((value, key) => {
+            finalChallengeHeaders[key] = value;
+        });
+        console.log(`[Step 5 Response Body] ${JSON.stringify(finalChallengeData)}`);
+        console.log(`[Step 5 Response Headers] ${JSON.stringify(finalChallengeHeaders)}`);
+        logs.push(`   Step 5 Response Body: ${JSON.stringify(finalChallengeData)}`);
+        logs.push(`   Step 5 Response Headers: ${JSON.stringify(finalChallengeHeaders)}`);
+
         logs.push("✅ Step 5: Challenge completed successfully!");
 
         // STEP 6: Retry birthdate request
@@ -286,7 +296,7 @@ app.post("/api/change-birthdate", async (req, res) => {
                         challengeId: innerChallengeId,
                         verificationToken: verificationToken,
                         rememberDevice: false,
-                        actionType: 7,
+                        actionType: "Generic",
                     }),
                 },
                 body: JSON.stringify({
