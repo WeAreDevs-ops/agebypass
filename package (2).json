@@ -1,0 +1,24 @@
+{
+  "name": "roblox-birthdate-changer",
+  "version": "1.0.0",
+  "description": "Web application to change Roblox birthdate through secure backend proxy",
+  "main": "birthdate-server.js",
+  "scripts": {
+    "start": "node birthdate-server.js",
+    "dev": "nodemon birthdate-server.js"
+  },
+  "keywords": [
+    "roblox",
+    "birthdate",
+    "api"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.22.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
