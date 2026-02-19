@@ -14,31 +14,47 @@ app.use(express.static("public")); // Serve HTML file from public folder
 const PROXY_URL = "http://td-customer-TRbiBG8:rhmOH2MsgO@pd7qpqyj.pr.thordata.net:9999";
 const proxyAgent = new ProxyAgent(PROXY_URL);
 
-// Helper function to make requests to Roblox
+const BROWSER_HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://www.roblox.com",
+    "Referer": "https://www.roblox.com/",
+    "sec-ch-ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
+    "Connection": "keep-alive",
+};
+
+// Regular request (no proxy)
 async function robloxRequest(url, options = {}) {
     console.log(`[Roblox Request] ${options.method || "GET"} ${url}`);
+    const response = await fetch(url, {
+        ...options,
+        headers: {
+            ...BROWSER_HEADERS,
+            ...options.headers,
+        },
+    });
+    return response;
+}
+
+// Proxied request (for Step 5)
+async function robloxRequestProxy(url, options = {}) {
+    console.log(`[Roblox Request via Proxy] ${options.method || "GET"} ${url}`);
     const response = await undiciFetch(url, {
         ...options,
         dispatcher: proxyAgent,
         headers: {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Origin": "https://www.roblox.com",
-            "Referer": "https://www.roblox.com/",
-            "sec-ch-ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-site",
-            "Connection": "keep-alive",
+            ...BROWSER_HEADERS,
             ...options.headers,
         },
     });
-
     return response;
 }
 
@@ -62,7 +78,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -258,7 +274,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Sending full metadata with ${Object.keys(finalMetadata).length} fields`);
 
-        const finalChallenge = await robloxRequest(
+        const finalChallenge = await robloxRequestProxy(
             "https://apis.roblox.com/challenge/v1/continue",
             {
                 method: "POST",
