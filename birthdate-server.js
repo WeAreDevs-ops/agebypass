@@ -78,7 +78,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -219,7 +219,15 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 4: Verify Password
         logs.push("🔄 Step 4: Verifying password...");
 
-        const verifyPassword = await robloxRequest(
+        const step4Body = JSON.stringify({
+            challengeId: innerChallengeId,
+            actionType: 7,
+            code: password,
+        });
+        console.log(`[Step 4 Request Body] ${step4Body}`);
+        logs.push(`   Step 4 Request Body: ${step4Body}`);
+
+        const verifyPassword = await robloxRequestProxy(
             `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
             {
                 method: "POST",
@@ -227,18 +235,24 @@ app.post("/api/change-birthdate", async (req, res) => {
                     "x-csrf-token": csrfToken,
                     Cookie: roblosecurity,
                 },
-                body: JSON.stringify({
-                    challengeId: innerChallengeId,
-                    actionType: 7,
-                    code: password,
-                }),
+                body: step4Body,
             },
         );
 
+        const step4ResponseText = await verifyPassword.text();
+        const step4Headers = {};
+        verifyPassword.headers.forEach((value, key) => { step4Headers[key] = value; });
+        console.log(`[Step 4 Response Status] ${verifyPassword.status}`);
+        console.log(`[Step 4 Response Body] ${step4ResponseText}`);
+        console.log(`[Step 4 Response Headers] ${JSON.stringify(step4Headers)}`);
+        logs.push(`   Step 4 Status: ${verifyPassword.status}`);
+        logs.push(`   Step 4 Response: ${step4ResponseText}`);
+        logs.push(`   Step 4 Headers: ${JSON.stringify(step4Headers)}`);
+
         if (verifyPassword.status !== 200) {
-            const errorData = await verifyPassword.json();
+            const errorData = JSON.parse(step4ResponseText);
             console.error(
-                `[Error] Step 4 failed: ${verifyPassword.status} - ${JSON.stringify(errorData)}`,
+                `[Error] Step 4 failed: ${verifyPassword.status} - ${step4ResponseText}`,
             );
             return res.status(500).json({
                 success: false,
@@ -247,7 +261,7 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
-        const verifyData = await verifyPassword.json();
+        const verifyData = JSON.parse(step4ResponseText);
         const verificationToken = verifyData.verificationToken;
 
         if (!verificationToken) {
