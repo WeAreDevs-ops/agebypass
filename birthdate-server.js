@@ -268,7 +268,40 @@ app.post("/api/change-birthdate", async (req, res) => {
         }
 
         logs.push("✅ Step 5: Challenge completed successfully!");
-        logs.push("🎉 Birthdate changed successfully!");
+
+        // STEP 6: Retry birthdate request
+        logs.push("🔄 Step 6: Retrying birthdate change after verification...");
+
+        const retryBirthdate = await robloxRequest(
+            "https://users.roblox.com/v1/birthdate",
+            {
+                method: "POST",
+                headers: {
+                    Cookie: roblosecurity,
+                    "x-csrf-token": csrfToken,
+                },
+                body: JSON.stringify({
+                    birthMonth: parseInt(birthMonth),
+                    birthDay: parseInt(birthDay),
+                    birthYear: parseInt(birthYear),
+                    password: password,
+                }),
+            }
+        );
+
+        if (retryBirthdate.status !== 200) {
+            const errorText = await retryBirthdate.text();
+            logs.push("❌ Step 6 failed");
+            return res.status(500).json({
+                success: false,
+                error: "Birthdate change failed after verification",
+                details: errorText,
+                logs,
+            });
+        }
+
+        logs.push("✅ Step 6: Birthdate changed successfully!");
+        logs.push("🎉 All steps completed successfully!");
 
         // Success!
         res.json({
