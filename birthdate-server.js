@@ -286,7 +286,7 @@ app.post("/api/change-birthdate", async (req, res) => {
                         challengeId: innerChallengeId,
                         verificationToken: verificationToken,
                         rememberDevice: false,
-                        actionType: "Generic",
+                        actionType: 7,
                     }),
                 },
                 body: JSON.stringify({
