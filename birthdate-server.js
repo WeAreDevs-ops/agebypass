@@ -47,7 +47,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://users.roblox.com/v1/description", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -291,7 +291,10 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         if (retryBirthdate.status !== 200) {
             const errorText = await retryBirthdate.text();
+            console.error(`[Error] Step 6 failed: ${retryBirthdate.status} - ${errorText}`);
             logs.push("❌ Step 6 failed");
+            logs.push(`   Status: ${retryBirthdate.status}`);
+            logs.push(`   Response: ${errorText}`);
             return res.status(500).json({
                 success: false,
                 error: "Birthdate change failed after verification",
