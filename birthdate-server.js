@@ -323,10 +323,67 @@ app.post("/api/change-birthdate", async (req, res) => {
             logs.push(`   Status: ${retryBirthdate.status}`);
             logs.push(`   Response: ${errorText}`);
             logs.push(`   Headers: ${JSON.stringify(step6Headers)}`);
+
+            // Check if Step 6 returned a blocksession challenge
+            const blockChallengeId = retryBirthdate.headers.get("rblx-challenge-id");
+            const blockChallengeType = retryBirthdate.headers.get("rblx-challenge-type");
+            const blockChallengeMetadata = retryBirthdate.headers.get("rblx-challenge-metadata");
+
+            if (!blockChallengeId || !blockChallengeType || !blockChallengeMetadata) {
+                return res.status(500).json({
+                    success: false,
+                    error: "Birthdate change failed after verification",
+                    details: errorText,
+                    logs,
+                });
+            }
+
+            logs.push(`   Block Challenge ID: ${blockChallengeId}`);
+            logs.push(`   Block Challenge Type: ${blockChallengeType}`);
+
+            // STEP 7: Continue blocksession challenge
+            logs.push("🔄 Step 7: Continuing blocksession challenge...");
+
+            const continueBlockSession = await robloxRequest(
+                "https://apis.roblox.com/challenge/v1/continue",
+                {
+                    method: "POST",
+                    headers: {
+                        "x-csrf-token": csrfToken,
+                        Cookie: roblosecurity,
+                    },
+                    body: JSON.stringify({
+                        challengeId: blockChallengeId,
+                        challengeType: blockChallengeType,
+                        challengeMetadata: blockChallengeMetadata,
+                    }),
+                }
+            );
+
+            const step7Body = await continueBlockSession.text();
+            const step7Headers = {};
+            continueBlockSession.headers.forEach((value, key) => { step7Headers[key] = value; });
+            console.log(`[Step 7 Response Status] ${continueBlockSession.status}`);
+            console.log(`[Step 7 Response Body] ${step7Body}`);
+            console.log(`[Step 7 Response Headers] ${JSON.stringify(step7Headers)}`);
+            logs.push(`   Step 7 Status: ${continueBlockSession.status}`);
+            logs.push(`   Step 7 Body: ${step7Body}`);
+            logs.push(`   Step 7 Headers: ${JSON.stringify(step7Headers)}`);
+
+            if (continueBlockSession.status !== 200) {
+                return res.status(500).json({
+                    success: false,
+                    error: `Blocksession challenge failed: ${continueBlockSession.status}`,
+                    details: step7Body,
+                    logs,
+                });
+            }
+
+            logs.push("✅ Step 7: Blocksession challenge continued!");
+
             return res.status(500).json({
                 success: false,
-                error: "Birthdate change failed after verification",
-                details: errorText,
+                error: "Step 7 completed - check logs for next steps",
                 logs,
             });
         }
