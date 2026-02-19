@@ -56,7 +56,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/description", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
