@@ -58,6 +58,12 @@ async function robloxRequestProxy(url, options = {}) {
     return response;
 }
 
+// Delay helper - random delay between min and max ms to mimic human behavior
+function delay(min, max) {
+    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Main endpoint to handle birthdate change
 app.post("/api/change-birthdate", async (req, res) => {
     try {
@@ -78,7 +84,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -96,6 +102,9 @@ app.post("/api/change-birthdate", async (req, res) => {
         }
 
         logs.push("✅ Step 1: CSRF token obtained");
+
+        // Human-like delay between steps
+        await delay(1000, 2000);
 
         // STEP 2: Trigger Challenge
         logs.push("🔄 Step 2: Sending birthdate change request...");
@@ -168,6 +177,8 @@ app.post("/api/change-birthdate", async (req, res) => {
         logs.push(`   Challenge ID: ${challengeId}`);
         logs.push(`   Challenge Type: ${challengeType}`);
 
+        await delay(1500, 2500);
+
         // STEP 3: Continue Challenge (First)
         logs.push("🔄 Step 3: Continuing challenge...");
 
@@ -216,6 +227,8 @@ app.post("/api/change-birthdate", async (req, res) => {
         console.log(`[Step 3 Parsed Metadata] ${JSON.stringify(metadata)}`);
         logs.push(`   Full Metadata: ${JSON.stringify(metadata)}`);
 
+        await delay(2000, 3500);
+
         // STEP 4: Verify Password
         logs.push("🔄 Step 4: Verifying password...");
 
@@ -227,7 +240,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         console.log(`[Step 4 Request Body] ${step4Body}`);
         logs.push(`   Step 4 Request Body: ${step4Body}`);
 
-        const verifyPassword = await robloxRequestProxy(
+        const verifyPassword = await robloxRequest(
             `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
             {
                 method: "POST",
@@ -277,6 +290,8 @@ app.post("/api/change-birthdate", async (req, res) => {
             `   Verification Token: ${verificationToken.substring(0, 20)}...`,
         );
 
+        await delay(1500, 2500);
+
         // STEP 5: Complete Challenge with Verification Token
         logs.push("🔄 Step 5: Completing challenge with verification token...");
 
@@ -288,7 +303,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Sending full metadata with ${Object.keys(finalMetadata).length} fields`);
 
-        const finalChallenge = await robloxRequestProxy(
+        const finalChallenge = await robloxRequest(
             "https://apis.roblox.com/challenge/v1/continue",
             {
                 method: "POST",
@@ -329,10 +344,12 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push("✅ Step 5: Challenge completed successfully!");
 
+        await delay(2000, 3000);
+
         // STEP 6: Retry birthdate request
         logs.push("🔄 Step 6: Retrying birthdate change after verification...");
 
-        const retryBirthdate = await robloxRequestProxy(
+        const retryBirthdate = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "POST",
