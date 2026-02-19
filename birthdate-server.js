@@ -84,7 +84,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -292,16 +292,18 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         await delay(1500, 2500);
 
-        // STEP 5: Complete Challenge with Verification Token
+        // STEP 5. Complete Challenge with Verification Token
         logs.push("🔄 Step 5: Completing challenge with verification token...");
 
-        // Use the full metadata from step 3 and inject the verification token
-        const finalMetadata = {
-            ...metadata, // Spread all fields from step 3
-            verificationToken: verificationToken // Add/replace verificationToken from step 4
+        // Only send the 4 fields Roblox expects - not the full step 3 metadata
+        const step5Metadata = {
+            rememberDevice: false,
+            actionType: metadata.actionType || "Generic",
+            verificationToken: verificationToken,
+            challengeId: innerChallengeId,
         };
 
-        logs.push(`   Sending full metadata with ${Object.keys(finalMetadata).length} fields`);
+        logs.push(`   Step 5 Metadata: ${JSON.stringify(step5Metadata)}`);
 
         const finalChallenge = await robloxRequest(
             "https://apis.roblox.com/challenge/v1/continue",
@@ -313,8 +315,8 @@ app.post("/api/change-birthdate", async (req, res) => {
                 },
                 body: JSON.stringify({
                     challengeId: challenge1Data.challengeId,
-                    challengeType: challenge1Data.challengeType,
-                    challengeMetadata: JSON.stringify(finalMetadata),
+                    challengeType: "twostepverification",
+                    challengeMetadata: JSON.stringify(step5Metadata),
                 }),
             },
         );
@@ -349,6 +351,16 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 6: Retry birthdate request
         logs.push("🔄 Step 6: Retrying birthdate change after verification...");
 
+        // Build base64 encoded challenge metadata as per Roblox's expected format
+        const step6ChallengeMetadata = Buffer.from(JSON.stringify({
+            rememberDevice: false,
+            actionType: "Generic",
+            verificationToken: verificationToken,
+            challengeId: innerChallengeId,
+        })).toString("base64");
+
+        logs.push(`   Step 6 Challenge Metadata (base64): ${step6ChallengeMetadata}`);
+
         const retryBirthdate = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
@@ -356,6 +368,9 @@ app.post("/api/change-birthdate", async (req, res) => {
                 headers: {
                     Cookie: roblosecurity,
                     "x-csrf-token": csrfToken,
+                    "rblx-challenge-id": challenge1Data.challengeId,
+                    "rblx-challenge-type": "twostepverification",
+                    "rblx-challenge-metadata": step6ChallengeMetadata,
                 },
                 body: JSON.stringify({
                     birthMonth: parseInt(birthMonth),
