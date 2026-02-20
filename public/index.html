@@ -3,308 +3,426 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Roblox Birthdate Changer</title>
+    <title>Roblox Age Bypass</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg: #0a0a0f;
+            --surface: #111118;
+            --border: #1e1e2e;
+            --accent: #e05c5c;
+            --accent2: #f0a04e;
+            --green: #4ecca3;
+            --text: #d0d0e0;
+            --muted: #555570;
+            --code-bg: #0d0d14;
         }
 
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Syne', sans-serif;
+            background: var(--bg);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            padding: 24px;
+            color: var(--text);
         }
 
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            max-width: 600px;
+        /* Subtle grid background */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(224,92,92,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(224,92,92,0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .wrapper {
+            position: relative;
+            z-index: 1;
             width: 100%;
-            padding: 40px;
+            max-width: 560px;
+        }
+
+        /* Header */
+        .header {
+            margin-bottom: 28px;
+        }
+
+        .header-top {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 6px;
+        }
+
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--accent);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
         }
 
         h1 {
-            font-size: 28px;
-            font-weight: 700;
-            color: #333;
-            margin-bottom: 10px;
-            text-align: center;
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            color: #fff;
         }
 
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
+        h1 span {
+            color: var(--accent);
         }
 
-        .form-group {
-            margin-bottom: 20px;
+        .tagline {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--muted);
+            padding-left: 48px;
+        }
+
+        /* Status bar */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--muted);
+            flex-shrink: 0;
+            transition: background 0.3s;
+        }
+
+        .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .status-dot.offline { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+        .status-label { color: var(--muted); }
+        .status-value { color: var(--text); margin-left: auto; }
+
+        /* Card */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 28px;
+        }
+
+        .field {
+            margin-bottom: 18px;
         }
 
         label {
             display: block;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
             font-weight: 600;
-            color: #333;
-            margin-bottom: 8px;
-            font-size: 14px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 7px;
+        }
+
+        label .required {
+            color: var(--accent);
+            margin-left: 3px;
         }
 
         input, select {
             width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 14px;
-            transition: all 0.3s ease;
-            font-family: inherit;
+            padding: 11px 14px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            appearance: none;
         }
+
+        input::placeholder { color: var(--muted); }
 
         input:focus, select:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(224, 92, 92, 0.1);
         }
 
-        .date-inputs {
+        select {
+            cursor: pointer;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23555570' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+
+        select option { background: var(--surface); }
+
+        .date-row {
             display: grid;
-            grid-template-columns: 1fr 1fr 2fr;
-            gap: 10px;
+            grid-template-columns: 2fr 1fr 2fr;
+            gap: 8px;
         }
 
+        /* Divider */
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 22px 0;
+        }
+
+        /* Submit button */
         .btn {
             width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            padding: 13px;
+            background: var(--accent);
+            color: #fff;
             border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
+            border-radius: 8px;
+            font-family: 'Syne', sans-serif;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
             cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 10px;
+            transition: opacity 0.2s, transform 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
         }
 
         .btn:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+            opacity: 0.9;
+            transform: translateY(-1px);
         }
 
+        .btn:active:not(:disabled) { transform: translateY(0); }
+
         .btn:disabled {
-            opacity: 0.6;
+            opacity: 0.45;
             cursor: not-allowed;
         }
 
-        .status {
-            margin-top: 20px;
-            padding: 16px;
-            border-radius: 10px;
-            font-size: 14px;
-            line-height: 1.6;
+        /* Spinner */
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
             display: none;
         }
 
-        .status.show {
-            display: block;
-        }
+        .btn.loading .spinner { display: block; }
+        .btn.loading .btn-text { display: none; }
 
-        .status.info {
-            background: #e3f2fd;
-            border: 1px solid #90caf9;
-            color: #1565c0;
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        .status.success {
-            background: #e8f5e9;
-            border: 1px solid #81c784;
-            color: #2e7d32;
-        }
-
-        .status.error {
-            background: #ffebee;
-            border: 1px solid #ef5350;
-            color: #c62828;
-        }
-
-        .logs {
-            margin-top: 20px;
-            padding: 16px;
-            background: #f5f5f5;
-            border-radius: 10px;
+        /* Result banner */
+        .result {
+            margin-top: 16px;
+            padding: 14px 16px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
             font-size: 13px;
-            font-family: 'Courier New', monospace;
-            max-height: 300px;
+            line-height: 1.5;
+            display: none;
+            border-left: 3px solid;
+        }
+
+        .result.show { display: block; }
+        .result.success { background: rgba(78,204,163,0.08); border-color: var(--green); color: var(--green); }
+        .result.error { background: rgba(224,92,92,0.08); border-color: var(--accent); color: #ff8080; }
+        .result.info { background: rgba(240,160,78,0.08); border-color: var(--accent2); color: var(--accent2); }
+
+        /* Logs terminal */
+        .terminal {
+            margin-top: 16px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: none;
+            overflow: hidden;
+        }
+
+        .terminal.show { display: block; }
+
+        .terminal-header {
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .terminal-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+        }
+
+        .terminal-body {
+            padding: 12px 14px;
+            max-height: 240px;
             overflow-y: auto;
-            display: none;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.8;
         }
 
-        .logs.show {
-            display: block;
-        }
+        .terminal-body::-webkit-scrollbar { width: 4px; }
+        .terminal-body::-webkit-scrollbar-track { background: transparent; }
+        .terminal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-        .log-line {
-            margin-bottom: 6px;
-            padding: 4px;
-        }
+        .log-line { color: var(--text); }
+        .log-line.success { color: var(--green); }
+        .log-line.error { color: var(--accent); }
+        .log-line.step { color: var(--accent2); }
 
+        /* Footer note */
         .note {
-            background: #fff3e0;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            color: #e65100;
-            margin-top: 15px;
-            border: 1px solid #ffb74d;
-        }
-
-        .note strong {
-            color: #bf360c;
-        }
-
-        .server-info {
-            background: #e8eaf6;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            color: #3f51b5;
-            margin-bottom: 20px;
-            border: 1px solid #9fa8da;
+            margin-top: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--muted);
+            text-align: center;
+            line-height: 1.6;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎂 Roblox Birthdate Changer</h1>
-        <p class="subtitle">Change your Roblox account birthdate securely</p>
-
-        <div class="server-info">
-            <strong>ℹ️ Server Status:</strong> <span id="serverStatus">Checking...</span>
+    <div class="wrapper">
+        <div class="header">
+            <div class="header-top">
+                <div class="logo-icon">🎂</div>
+                <h1>Age<span>Bypass</span></h1>
+            </div>
+            <div class="tagline">// roblox birthdate changer v2.0</div>
         </div>
 
-        <form id="birthdateForm">
-            <div class="form-group">
-                <label for="cookie">Roblox Cookie (.ROBLOSECURITY)</label>
-                <input 
-                    type="text" 
-                    id="cookie" 
-                    placeholder="_|WARNING:-DO-NOT-SHARE-THIS..."
-                    required
-                >
+        <div class="status-bar">
+            <div class="status-dot" id="statusDot"></div>
+            <span class="status-label">server</span>
+            <span class="status-value" id="statusText">checking...</span>
+        </div>
+
+        <div class="card">
+            <div class="field">
+                <label>.ROBLOSECURITY cookie <span class="required">*</span></label>
+                <input type="text" id="cookie" placeholder="_|WARNING:-DO-NOT-SHARE-THIS..." autocomplete="off" spellcheck="false">
             </div>
 
-            <div class="form-group">
-                <label for="password">Account Password</label>
-                <input 
-                    type="password" 
-                    id="password" 
-                    placeholder="Enter your Roblox password"
-                    required
-                >
+            <div class="field">
+                <label>account password <span class="required">*</span></label>
+                <input type="password" id="password" placeholder="••••••••••••" autocomplete="off">
             </div>
 
-            <div class="form-group">
-                <label>New Birthdate</label>
-                <div class="date-inputs">
-                    <select id="birthMonth" required>
+            <div class="divider"></div>
+
+            <div class="field">
+                <label>new birthdate <span class="required">*</span></label>
+                <div class="date-row">
+                    <select id="birthMonth">
                         <option value="">Month</option>
-                        <option value="1">Jan</option>
-                        <option value="2">Feb</option>
-                        <option value="3">Mar</option>
-                        <option value="4">Apr</option>
+                        <option value="1">January</option>
+                        <option value="2">February</option>
+                        <option value="3">March</option>
+                        <option value="4">April</option>
                         <option value="5">May</option>
-                        <option value="6">Jun</option>
-                        <option value="7">Jul</option>
-                        <option value="8">Aug</option>
-                        <option value="9">Sep</option>
-                        <option value="10">Oct</option>
-                        <option value="11">Nov</option>
-                        <option value="12">Dec</option>
+                        <option value="6">June</option>
+                        <option value="7">July</option>
+                        <option value="8">August</option>
+                        <option value="9">September</option>
+                        <option value="10">October</option>
+                        <option value="11">November</option>
+                        <option value="12">December</option>
                     </select>
-                    <input 
-                        type="number" 
-                        id="birthDay" 
-                        placeholder="Day"
-                        min="1" 
-                        max="31"
-                        required
-                    >
-                    <input 
-                        type="number" 
-                        id="birthYear" 
-                        placeholder="Year"
-                        min="1900" 
-                        max="2024"
-                        required
-                    >
+                    <input type="number" id="birthDay" placeholder="DD" min="1" max="31">
+                    <input type="number" id="birthYear" placeholder="YYYY" min="1900" max="2024">
                 </div>
             </div>
 
-            <button type="submit" class="btn" id="submitBtn">
-                Change Birthdate
+            <button class="btn" id="submitBtn" onclick="handleSubmit()">
+                <div class="spinner"></div>
+                <span class="btn-text">Run Bypass →</span>
             </button>
-        </form>
 
-        <div id="status" class="status"></div>
-        <div id="logs" class="logs"></div>
-
-        <div class="note">
-            <strong>⚠️ Important:</strong> This tool uses a secure backend server to communicate with Roblox APIs. Your credentials are sent directly to Roblox and not stored.
+            <div class="result" id="result"></div>
+            <div class="terminal" id="terminal">
+                <div class="terminal-header">
+                    <div class="terminal-dot" style="background:#ff5f57"></div>
+                    <div class="terminal-dot" style="background:#ffbd2e"></div>
+                    <div class="terminal-dot" style="background:#28c840"></div>
+                </div>
+                <div class="terminal-body" id="terminalBody"></div>
+            </div>
         </div>
+
+        <div class="note">credentials are sent directly to roblox — nothing is stored locally</div>
     </div>
 
     <script>
         const API_URL = '';
 
-        const form = document.getElementById('birthdateForm');
-        const submitBtn = document.getElementById('submitBtn');
-        const statusDiv = document.getElementById('status');
-        const logsDiv = document.getElementById('logs');
-        const serverStatus = document.getElementById('serverStatus');
-
-        // Check server health
         async function checkServer() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
             try {
-                const response = await fetch(`${API_URL}/api/health`);
-                const data = await response.json();
-                serverStatus.textContent = '✅ Connected';
-                serverStatus.style.color = '#2e7d32';
-                return true;
-            } catch (error) {
-                serverStatus.textContent = '❌ Server not running';
-                serverStatus.style.color = '#c62828';
-                return false;
+                const res = await fetch(`${API_URL}/api/health`);
+                await res.json();
+                dot.className = 'status-dot online';
+                text.textContent = 'online · localhost:8080';
+            } catch {
+                dot.className = 'status-dot offline';
+                text.textContent = 'offline — run: node birthdate-server.js';
             }
         }
 
-        // Show status message
-        function showStatus(message, type = 'info') {
-            statusDiv.className = `status ${type} show`;
-            statusDiv.innerHTML = message;
+        function showResult(message, type) {
+            const el = document.getElementById('result');
+            el.className = `result ${type} show`;
+            el.innerHTML = message;
         }
 
-        // Show logs
         function showLogs(logs) {
-            logsDiv.className = 'logs show';
-            logsDiv.innerHTML = logs.map(log => 
-                `<div class="log-line">${log}</div>`
-            ).join('');
-            
-            // Scroll to bottom
-            logsDiv.scrollTop = logsDiv.scrollHeight;
+            const terminal = document.getElementById('terminal');
+            const body = document.getElementById('terminalBody');
+            terminal.className = 'terminal show';
+            body.innerHTML = logs.map(log => {
+                let cls = 'log-line';
+                if (log.includes('✅')) cls += ' success';
+                else if (log.includes('❌')) cls += ' error';
+                else if (log.includes('🔄')) cls += ' step';
+                return `<div class="${cls}">${log}</div>`;
+            }).join('');
+            body.scrollTop = body.scrollHeight;
         }
 
-        // Handle form submission
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
+        async function handleSubmit() {
             const cookie = document.getElementById('cookie').value.trim();
             const password = document.getElementById('password').value;
             const birthMonth = document.getElementById('birthMonth').value;
@@ -312,80 +430,52 @@
             const birthYear = document.getElementById('birthYear').value;
 
             if (!cookie || !password || !birthMonth || !birthDay || !birthYear) {
-                showStatus('❌ Please fill in all fields!', 'error');
+                showResult('❌ fill in all fields before submitting', 'error');
                 return;
             }
 
-            // Check server
-            const serverOk = await checkServer();
-            if (!serverOk) {
-                showStatus(
-                    '❌ <strong>Server Error</strong><br><br>' +
-                    'The backend server is not running. Please start the server with:<br>' +
-                    '<code>node birthdate-server.js</code>',
-                    'error'
-                );
-                return;
-            }
-
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Processing...';
-            showStatus('🔄 Sending request to server...', 'info');
-            logsDiv.className = 'logs';
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.className = 'btn loading';
+            document.getElementById('terminal').className = 'terminal';
+            showResult('⏳ processing...', 'info');
 
             try {
-                const response = await fetch(`${API_URL}/api/change-birthdate`, {
+                const res = await fetch(`${API_URL}/api/change-birthdate`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        cookie,
-                        password,
-                        birthMonth,
-                        birthDay,
-                        birthYear
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cookie, password, birthMonth, birthDay, birthYear })
                 });
 
-                const data = await response.json();
+                const data = await res.json();
 
                 if (data.success) {
-                    showStatus(
-                        `🎉 <strong>Success!</strong><br><br>` +
-                        `Your birthdate has been changed to: ${data.newBirthdate.month}/${data.newBirthdate.day}/${data.newBirthdate.year}`,
+                    showResult(
+                        `✅ success — birthdate changed to ` +
+                        `${data.newBirthdate.month}/${data.newBirthdate.day}/${data.newBirthdate.year}`,
                         'success'
                     );
-                    showLogs(data.logs);
-                    
-                    // Clear form
-                    form.reset();
+                    document.getElementById('cookie').value = '';
+                    document.getElementById('password').value = '';
                 } else {
-                    showStatus(
-                        `❌ <strong>Error</strong><br><br>` +
-                        `${data.error}`,
-                        'error'
-                    );
-                    if (data.logs) {
-                        showLogs(data.logs);
-                    }
+                    showResult(`❌ ${data.error}`, 'error');
                 }
 
-            } catch (error) {
-                console.error('Error:', error);
-                showStatus(
-                    `❌ <strong>Network Error</strong><br><br>` +
-                    `Failed to connect to server. Make sure the backend is running.<br><br>` +
-                    `Error: ${error.message}`,
-                    'error'
-                );
+                if (data.logs) showLogs(data.logs);
+
+            } catch (err) {
+                showResult(`❌ network error — is the server running?\n${err.message}`, 'error');
             } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Change Birthdate';
+                btn.disabled = false;
+                btn.className = 'btn';
             }
+        }
+
+        // Enter key support
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Enter') handleSubmit();
         });
 
-        // Check server on load
         checkServer();
     </script>
 </body>
