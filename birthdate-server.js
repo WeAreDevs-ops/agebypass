@@ -1,18 +1,14 @@
 // birthdate-server.js - Node.js Backend for Roblox Birthdate Changer
-// Install dependencies: npm install express cors undici
+// Install dependencies: npm install express cors
+// Run: node birthdate-server.js
 
 const express = require("express");
 const cors = require("cors");
-const { fetch: undiciFetch, ProxyAgent } = require("undici");
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // Serve HTML file from public folder
-
-// Proxy configuration - Sticky session (same IP for 30 mins)
-const PROXY_URL = "http://td-customer-TRbiBG8-country-PH-sessid-PHzuapilychcuw416-sesstime-30:rhmOH2MsgO@pd7qpqyj.as.thordata.net:9999";
-const proxyAgent = new ProxyAgent(PROXY_URL);
+app.use(express.static("public")); // Serve index.html from public folder
 
 const BROWSER_HEADERS = {
     "Content-Type": "application/json",
@@ -31,25 +27,11 @@ const BROWSER_HEADERS = {
     "Connection": "keep-alive",
 };
 
-// Regular request (no proxy)
+// All requests go direct (residential IP from localhost/VPS)
 async function robloxRequest(url, options = {}) {
     console.log(`[Roblox Request] ${options.method || "GET"} ${url}`);
     const response = await fetch(url, {
         ...options,
-        headers: {
-            ...BROWSER_HEADERS,
-            ...options.headers,
-        },
-    });
-    return response;
-}
-
-// Proxied request (for Step 5)
-async function robloxRequestProxy(url, options = {}) {
-    console.log(`[Roblox Request via Proxy] ${options.method || "GET"} ${url}`);
-    const response = await undiciFetch(url, {
-        ...options,
-        dispatcher: proxyAgent,
         headers: {
             ...BROWSER_HEADERS,
             ...options.headers,
@@ -84,7 +66,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -109,7 +91,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 2: Trigger Challenge
         logs.push("🔄 Step 2: Sending birthdate change request...");
 
-        const changeRequest = await robloxRequestProxy(
+        const changeRequest = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "POST",
@@ -305,7 +287,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Step 5 Metadata: ${JSON.stringify(step5Metadata)}`);
 
-        const finalChallenge = await robloxRequestProxy(
+        const finalChallenge = await robloxRequest(
             "https://apis.roblox.com/challenge/v1/continue",
             {
                 method: "POST",
@@ -361,7 +343,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Step 6 Challenge Metadata (base64): ${step6ChallengeMetadata}`);
 
-        const retryBirthdate = await robloxRequestProxy(
+        const retryBirthdate = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "POST",
