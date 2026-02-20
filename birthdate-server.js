@@ -10,8 +10,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public")); // Serve HTML file from public folder
 
-// Proxy configuration
-const PROXY_URL = "http://td-customer-TRbiBG8:rhmOH2MsgO@pd7qpqyj.pr.thordata.net:9999";
+// Proxy configuration - Sticky session (same IP for 30 mins)
+const PROXY_URL = "http://td-customer-TRbiBG8-country-PH-sessid-PHzuapilychcuw416-sesstime-30:rhmOH2MsgO@pd7qpqyj.as.thordata.net:9999";
 const proxyAgent = new ProxyAgent(PROXY_URL);
 
 const BROWSER_HEADERS = {
@@ -84,7 +84,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://auth.roblox.com/v1/usernames/validate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -109,7 +109,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 2: Trigger Challenge
         logs.push("🔄 Step 2: Sending birthdate change request...");
 
-        const changeRequest = await robloxRequest(
+        const changeRequest = await robloxRequestProxy(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "POST",
@@ -305,7 +305,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Step 5 Metadata: ${JSON.stringify(step5Metadata)}`);
 
-        const finalChallenge = await robloxRequest(
+        const finalChallenge = await robloxRequestProxy(
             "https://apis.roblox.com/challenge/v1/continue",
             {
                 method: "POST",
@@ -361,7 +361,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Step 6 Challenge Metadata (base64): ${step6ChallengeMetadata}`);
 
-        const retryBirthdate = await robloxRequest(
+        const retryBirthdate = await robloxRequestProxy(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "POST",
