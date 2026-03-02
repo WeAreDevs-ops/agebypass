@@ -66,7 +66,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://users.roblox.com/v1/birthdate", {
+        const csrf1 = await robloxRequest("https://users.roblox.com/v1/description", {
             method: "POST",
             headers: {
                 Cookie: roblosecurity,
@@ -94,7 +94,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         const changeRequest = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
-                method: "POST",
+                method: "PATCH",
                 headers: {
                     Cookie: roblosecurity,
                     "x-csrf-token": csrfToken,
@@ -346,7 +346,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         const retryBirthdate = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
-                method: "POST",
+                method: "PATCH",
                 headers: {
                     Cookie: roblosecurity,
                     "x-csrf-token": csrfToken,
