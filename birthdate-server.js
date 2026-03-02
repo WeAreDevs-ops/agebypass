@@ -94,7 +94,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         const changeRequest = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
-                method: "PATCH",
+                method: "POST",
                 headers: {
                     Cookie: roblosecurity,
                     "x-csrf-token": csrfToken,
