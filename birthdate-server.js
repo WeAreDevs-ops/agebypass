@@ -232,7 +232,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         // NEW STEP 3: Generate reauthentication token
         logs.push("🔄 Step 3: Generate reauthentication token...");
         const reauthRes = await curlRequest({ 
-            url: "https://reauthentication.roblox.com/v1/token/generate",  // NEW API
+            url: "https://apis.roblox.com/reauthentication-service/v1/token/generate",  // NEW API
             method: "POST", 
             headers: buildHeaders(session), 
             body: { password: password }, 
