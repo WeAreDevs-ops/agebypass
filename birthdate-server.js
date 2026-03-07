@@ -165,7 +165,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         // Step 1: CSRF
         logs.push("🔄 Step 1: CSRF...");
-        const csrfRes = await curlRequest({ url: "https://users.roblox.com/v1/description", method: "POST", headers: buildHeaders(session), body: { description: "test" }, cookie });
+        const csrfRes = await curlRequest({ url: "https://auth.roblox.com/v2/logout", method: "POST", headers: buildHeaders(session), body: { description: "test" }, cookie });
         session.csrfToken = csrfRes.headers["x-csrf-token"];
         if (!session.csrfToken) return res.status(403).json({ success: false, error: "No CSRF", logs });
         logs.push("✅ Step 1: CSRF obtained");
