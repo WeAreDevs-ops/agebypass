@@ -1,4 +1,4 @@
-// birthdate-server.js - Fixed base64 decoding for challengeMetadata
+// birthdate-server.js - Complete with hardcoded x-bound-auth-token
 
 const express = require("express");
 const cors = require("cors");
@@ -13,6 +13,9 @@ app.use(express.static("public"));
 
 const sessions = new Map();
 const CURL_BINARY = path.join(__dirname, "bin", "curl-impersonate-chrome");
+
+// HARDCODED x-bound-auth-token from browser capture
+const HARDCODED_BOUND_TOKEN = "v1|47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=|1772880618|wrVInwAxtniDfS9ag/iIQtRKirBv+wBGAisLMxMtZmrijnaZj70RbdNmw8c3xlrXYKl7Gvp7LUeB6gYrBIjJew==|Ksxn4gTVPEUoY16x+yvAhUCe0W5nK5mp7ETH8gSzxHOl3kOhQRCDnsTc3wo9+TiSCXtKGXNJPCSLJRpaqcziwA==";
 
 function checkBinary() {
     if (!fs.existsSync(CURL_BINARY)) {
@@ -55,6 +58,8 @@ function buildHeaders(session, extra = {}) {
         "sec-fetch-site": "same-site",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
+        // ADD HARDCODED x-bound-auth-token to ALL requests
+        "x-bound-auth-token": HARDCODED_BOUND_TOKEN,
     };
     if (session.csrfToken) h["x-csrf-token"] = session.csrfToken;
     if (session.machineId) h["roblox-machine-id"] = session.machineId;
@@ -157,11 +162,12 @@ app.post("/api/change-birthdate", async (req, res) => {
         const session = getSession(cookie);
         
         logs.push(`🔐 Using: ${fs.existsSync(CURL_BINARY) ? "curl-impersonate" : "system curl"}`);
+        logs.push(`🔑 Using hardcoded x-bound-auth-token`);
 
         // Step 1: CSRF
         logs.push("🔄 Step 1: CSRF...");
         const csrfRes = await curlRequest({ 
-            url: "https://auth.roblox.com/v2/logout", 
+            url: "https://users.roblox.com/v1/description", 
             method: "POST", 
             headers: buildHeaders(session), 
             body: { description: "test" }, 
@@ -209,7 +215,6 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
-        // Capture challenge headers from response
         const challengeId = changeRes.headers["rblx-challenge-id"];
         const challengeType = changeRes.headers["rblx-challenge-type"];
         const challengeMetadata = changeRes.headers["rblx-challenge-metadata"];
@@ -223,7 +228,6 @@ app.post("/api/change-birthdate", async (req, res) => {
         logs.push(`   Challenge ID: ${challengeId}`);
         logs.push(`   Challenge Type: ${challengeType}`);
 
-        // FIX: Decode base64 challengeMetadata before parsing
         let initialMetadata;
         try {
             const decodedMetadata = Buffer.from(challengeMetadata, 'base64').toString('utf8');
@@ -263,7 +267,6 @@ app.post("/api/change-birthdate", async (req, res) => {
         logs.push(`✅ Step 3: Challenge continued`);
         logs.push(`   New Challenge Type: ${contRes.data.challengeType}`);
 
-        // Parse the continue response metadata
         const continueMetadata = JSON.parse(contRes.data.challengeMetadata);
         const userId = continueMetadata.userId;
         const innerChallengeId = continueMetadata.challengeId;
@@ -389,6 +392,7 @@ function start() {
     app.listen(PORT, "0.0.0.0", () => {
         console.log(`🚀 Server on port ${PORT}`);
         console.log(`🔒 curl-impersonate: ${hasBinary ? "✅" : "❌ (using system curl)"}`);
+        console.log(`🔑 Hardcoded x-bound-auth-token: ${HARDCODED_BOUND_TOKEN.substring(0, 30)}...`);
     });
 }
 
