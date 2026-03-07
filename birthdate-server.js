@@ -1,399 +1,550 @@
-// birthdate-server.js - Complete with hardcoded x-bound-auth-token
+// birthdate-server-optimized.js - Optimized for automatic x-bound-auth-token generation
+// Roblox's JS generates the token automatically - we just need to capture it from requests
 
 const express = require("express");
 const cors = require("cors");
-const { spawn } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+
+puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-const sessions = new Map();
-const CURL_BINARY = path.join(__dirname, "bin", "curl-impersonate-chrome");
+// Browser singleton
+let browser = null;
 
-// HARDCODED x-bound-auth-token from browser capture
-const HARDCODED_BOUND_TOKEN = "v1|47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=|1772880618|wrVInwAxtniDfS9ag/iIQtRKirBv+wBGAisLMxMtZmrijnaZj70RbdNmw8c3xlrXYKl7Gvp7LUeB6gYrBIjJew==|Ksxn4gTVPEUoY16x+yvAhUCe0W5nK5mp7ETH8gSzxHOl3kOhQRCDnsTc3wo9+TiSCXtKGXNJPCSLJRpaqcziwA==";
-
-function checkBinary() {
-    if (!fs.existsSync(CURL_BINARY)) {
-        console.log("⚠️  curl-impersonate not found, using system curl");
-        return false;
-    }
-    fs.chmodSync(CURL_BINARY, 0o755);
-    console.log("✅ curl-impersonate ready");
-    return true;
-}
-
-function getSession(cookie) {
-    const key = cookie.substring(0, 50);
-    if (!sessions.has(key)) {
-        sessions.set(key, {
-            machineId: null,
-            csrfToken: null,
-            fp: {
-                ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                secChUa: '"Not A(Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            }
+async function getBrowser() {
+    if (!browser) {
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--window-size=1920,1080',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process',
+            ],
+            defaultViewport: { width: 1920, height: 1080 }
         });
     }
-    return sessions.get(key);
+    return browser;
 }
 
-function buildHeaders(session, extra = {}) {
-    const h = {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json;charset=utf-8",
-        "User-Agent": session.fp.ua,
-        "Accept-Language": "en-US,en;q=0.9",
-        "Origin": "https://www.roblox.com",
-        "Referer": "https://www.roblox.com/my/account#!/info",
-        "sec-ch-ua": session.fp.secChUa,
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        // ADD HARDCODED x-bound-auth-token to ALL requests
-        "x-bound-auth-token": HARDCODED_BOUND_TOKEN,
+function delay(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+function randomDelay(min, max) {
+    return delay(Math.floor(Math.random() * (max - min + 1)) + min);
+}
+
+// Main function: Visit Roblox, let JS generate token, capture it from requests
+async function getRobloxSession(cookie) {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    
+    const session = {
+        csrfToken: null,
+        boundAuthToken: null,
+        machineId: null,
+        cookieValid: false,
+        userId: null
     };
-    if (session.csrfToken) h["x-csrf-token"] = session.csrfToken;
-    if (session.machineId) h["roblox-machine-id"] = session.machineId;
-    return Object.assign(h, extra);
-}
-
-function curlRequest(opts) {
-    return new Promise((resolve, reject) => {
-        const { url, method = "GET", headers = {}, body = null, cookie = null } = opts;
+    
+    // CRITICAL: Set up request interception BEFORE any navigation
+    const cdpSession = await page.target().createCDPSession();
+    await cdpSession.send('Fetch.enable', {
+        patterns: [{ urlPattern: '*roblox.com*', requestStage: 'Request' }]
+    });
+    
+    // Capture ALL request headers including x-bound-auth-token
+    cdpSession.on('Fetch.requestPaused', async (params) => {
+        const { requestId, request } = params;
         
-        const curlPath = fs.existsSync(CURL_BINARY) ? CURL_BINARY : "curl";
+        // Extract headers
+        const headers = request.headers || {};
         
-        const args = [
-            "--silent", 
-            "--show-error", 
-            "--location", 
-            "--http1.1",
-            "--compressed",
-            "--request", method, 
-            "--url", url
-        ];
-        
-        Object.entries(headers).forEach(([k, v]) => { 
-            if (v != null) args.push("--header", `${k}: ${v}`); 
-        });
-        
-        if (cookie) {
-            const robloxCookie = cookie.startsWith(".ROBLOSECURITY=") ? cookie : `.ROBLOSECURITY=${cookie}`;
-            args.push("--cookie", robloxCookie);
+        if (headers['x-bound-auth-token']) {
+            session.boundAuthToken = headers['x-bound-auth-token'];
+            console.log('🔑 Captured x-bound-auth-token:', session.boundAuthToken.substring(0, 40) + '...');
         }
         
-        if (body) args.push("--data", JSON.stringify(body));
+        if (headers['x-csrf-token']) {
+            session.csrfToken = headers['x-csrf-token'];
+        }
         
-        args.push("--dump-header", "-", "--write-out", "\nHTTP_CODE:%{http_code}");
+        if (headers['roblox-machine-id']) {
+            session.machineId = headers['roblox-machine-id'];
+        }
         
-        const proc = spawn(curlPath, args, { env: process.env });
-        let stdout = "", stderr = "";
+        // Continue the request (don't block)
+        await cdpSession.send('Fetch.continueRequest', { requestId });
+    });
+    
+    // Also capture from responses
+    page.on('response', async (response) => {
+        const headers = response.headers();
+        if (headers['x-csrf-token']) session.csrfToken = headers['x-csrf-token'];
+        if (headers['roblox-machine-id']) session.machineId = headers['roblox-machine-id'];
         
-        proc.stdout.on("data", d => stdout += d.toString());
-        proc.stderr.on("data", d => stderr += d.toString());
-        proc.on("error", reject);
+        // Try to get user ID from any response
+        try {
+            if (response.url().includes('/v1/users/') || response.url().includes('/v1/birthdate')) {
+                const body = await response.text().catch(() => null);
+                if (body) {
+                    const match = body.match(/"userId":\s*(\d+)/);
+                    if (match) session.userId = match[1];
+                }
+            }
+        } catch (e) {}
+    });
+    
+    try {
+        const cookieValue = cookie.startsWith(".ROBLOSECURITY=") ? cookie.substring(15) : cookie;
         
-        proc.on("close", code => {
-            if (code !== 0) return reject(new Error(`curl failed: ${stderr}`));
-            
+        // Step 1: Navigate to Roblox homepage (loads their JS framework)
+        console.log('🌐 Step 1: Loading Roblox homepage...');
+        await page.goto('https://www.roblox.com/', { 
+            waitUntil: 'networkidle2',
+            timeout: 30000
+        });
+        
+        // Step 2: Set the auth cookie
+        console.log('🍪 Step 2: Setting auth cookie...');
+        await page.setCookie({
+            name: '.ROBLOSECURITY',
+            value: cookieValue,
+            domain: '.roblox.com',
+            path: '/',
+            httpOnly: true,
+            secure: true,
+            sameSite: 'Lax'
+        });
+        
+        // Step 3: Navigate to account page (triggers token generation)
+        console.log('👤 Step 3: Navigating to account settings...');
+        await page.goto('https://www.roblox.com/my/account#!/info', { 
+            waitUntil: 'networkidle2',
+            timeout: 30000
+        });
+        
+        // Wait for Roblox's JS to initialize and generate tokens
+        console.log('⏳ Step 4: Waiting for Roblox JS to initialize...');
+        await randomDelay(3000, 5000);
+        
+        // Step 5: Trigger an API call to force token attachment
+        // This is key - Roblox's JS wraps fetch/XHR and adds the token
+        console.log('🔄 Step 5: Triggering API call to capture token...');
+        
+        await page.evaluate(async () => {
+            // This will be intercepted by Roblox's JS which adds x-bound-auth-token
             try {
-                const parts = stdout.split("HTTP_CODE:");
-                const headerBody = parts[0];
-                const status = parseInt(parts[1]?.trim() || "0");
-                
-                let headerEnd = headerBody.indexOf("\r\n\r\n");
-                if (headerEnd === -1) {
-                    headerEnd = headerBody.indexOf("\n\n");
-                }
-                if (headerEnd === -1) {
-                    throw new Error("Cannot find end of headers");
-                }
-                
-                const headerSection = headerBody.substring(0, headerEnd);
-                const body = headerBody.substring(headerEnd + 4);
-                
-                const responseHeaders = {};
-                headerSection.split(/\r?\n/).forEach(line => {
-                    if (line.includes(":")) {
-                        const [k, ...v] = line.split(":");
-                        responseHeaders[k.toLowerCase().trim()] = v.join(":").trim();
+                await fetch('https://users.roblox.com/v1/birthdate', {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+            } catch (e) {}
+        });
+        
+        // Wait for the request to be made and token to be captured
+        await randomDelay(2000, 3000);
+        
+        // Step 6: If still no token, try clicking on the birthdate field
+        // This definitely triggers token generation
+        if (!session.boundAuthToken) {
+            console.log('🖱️ Step 6: Clicking birthdate field to trigger token...');
+            
+            // Try multiple selectors for the birthdate edit button
+            const selectors = [
+                '[data-testid="birthdate-edit-button"]',
+                '.birthdate-edit-button',
+                'button[ng-click*="birthdate"]',
+                '.account-info-section .btn-edit',
+                '.account-info-section button'
+            ];
+            
+            for (const selector of selectors) {
+                try {
+                    const btn = await page.$(selector);
+                    if (btn) {
+                        await btn.click();
+                        console.log('   Clicked:', selector);
+                        break;
                     }
+                } catch (e) {}
+            }
+            
+            await randomDelay(2000, 3000);
+        }
+        
+        // Step 7: Try another API call after clicking
+        if (!session.boundAuthToken) {
+            console.log('🔄 Step 7: Second API call attempt...');
+            await page.evaluate(async () => {
+                try {
+                    await fetch('https://auth.roblox.com/v2/logout', {
+                        method: 'POST',
+                        credentials: 'include',
+                        body: JSON.stringify({})
+                    });
+                } catch (e) {}
+            });
+            await randomDelay(2000, 3000);
+        }
+        
+        // Check if we're logged in
+        const currentUrl = page.url();
+        session.cookieValid = !currentUrl.includes('/login');
+        
+        console.log('\n📊 Session Status:');
+        console.log('   Cookie Valid:', session.cookieValid);
+        console.log('   CSRF Token:', session.csrfToken ? '✅' : '❌');
+        console.log('   Bound Auth Token:', session.boundAuthToken ? '✅' : '❌');
+        console.log('   Machine ID:', session.machineId ? '✅' : '❌');
+        
+        return session;
+        
+    } finally {
+        await cdpSession.detach();
+        await page.close();
+    }
+}
+
+// Make API request using captured tokens
+async function makeApiRequest(cookie, url, method, body, session, logs) {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    
+    try {
+        const cookieValue = cookie.startsWith(".ROBLOSECURITY=") ? cookie.substring(15) : cookie;
+        
+        // Set cookie first
+        await page.goto('https://www.roblox.com/', { waitUntil: 'domcontentloaded' });
+        await page.setCookie({
+            name: '.ROBLOSECURITY',
+            value: cookieValue,
+            domain: '.roblox.com',
+            path: '/',
+            httpOnly: true,
+            secure: true,
+            sameSite: 'Lax'
+        });
+        
+        // Make the request with captured tokens
+        const result = await page.evaluate(async (url, method, body, tokens) => {
+            try {
+                const headers = {
+                    'Content-Type': 'application/json;charset=utf-8',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Origin': 'https://www.roblox.com',
+                    'Referer': 'https://www.roblox.com/my/account#!/info',
+                    'X-Requested-With': 'XMLHttpRequest'
+                };
+                
+                if (tokens.csrfToken) headers['x-csrf-token'] = tokens.csrfToken;
+                if (tokens.boundAuthToken) headers['x-bound-auth-token'] = tokens.boundAuthToken;
+                if (tokens.machineId) headers['roblox-machine-id'] = tokens.machineId;
+                
+                const response = await fetch(url, {
+                    method,
+                    credentials: 'include',
+                    headers,
+                    body: body ? JSON.stringify(body) : undefined
                 });
                 
-                let data = null;
-                if (body && body.trim()) {
-                    try {
-                        data = JSON.parse(body);
-                    } catch (e) {
-                        console.log("Body parse error, raw:", body.substring(0, 200));
-                        throw e;
-                    }
-                }
+                const responseHeaders = {};
+                response.headers.forEach((v, k) => responseHeaders[k] = v);
                 
-                resolve({ status, headers: responseHeaders, body, data });
-            } catch (e) {
-                reject(new Error(`Parse error: ${e.message}`));
+                return {
+                    status: response.status,
+                    headers: responseHeaders,
+                    body: await response.text()
+                };
+            } catch (error) {
+                return { error: error.message };
             }
-        });
-    });
+        }, url, method, body, session);
+        
+        if (result.error) throw new Error(result.error);
+        
+        // Parse body
+        let data = null;
+        try {
+            data = JSON.parse(result.body);
+        } catch (e) {}
+        
+        // Update tokens from response
+        if (result.headers['x-csrf-token']) session.csrfToken = result.headers['x-csrf-token'];
+        if (result.headers['roblox-machine-id']) session.machineId = result.headers['roblox-machine-id'];
+        
+        return { ...result, data };
+        
+    } finally {
+        await page.close();
+    }
 }
 
-function delay(min, max) {
-    return new Promise(r => setTimeout(r, Math.floor(Math.random() * (max - min + 1)) + min));
-}
-
+// Main API endpoint
 app.post("/api/change-birthdate", async (req, res) => {
+    const logs = [];
+    
     try {
         const { cookie, password, birthMonth, birthDay, birthYear } = req.body;
         if (!cookie || !password || !birthMonth || !birthDay || !birthYear) {
             return res.status(400).json({ success: false, error: "Missing fields" });
         }
 
-        const logs = [];
-        const session = getSession(cookie);
+        logs.push("🎭 Starting optimized Puppeteer automation...");
+        logs.push("🔑 Token will be auto-generated by Roblox's JS");
+
+        // Step 1: Get session with auto-generated token
+        logs.push("🔄 Step 1: Establishing session...");
+        const session = await getRobloxSession(cookie);
         
-        logs.push(`🔐 Using: ${fs.existsSync(CURL_BINARY) ? "curl-impersonate" : "system curl"}`);
-        logs.push(`🔑 Using hardcoded x-bound-auth-token`);
-
-        // Step 1: CSRF
-        logs.push("🔄 Step 1: CSRF...");
-        const csrfRes = await curlRequest({ 
-            url: "https://auth.roblox.com/v2/logout", 
-            method: "POST", 
-            headers: buildHeaders(session), 
-            body: { description: "test" }, 
-            cookie 
-        });
-        session.csrfToken = csrfRes.headers["x-csrf-token"];
-        if (!session.csrfToken) return res.status(403).json({ success: false, error: "No CSRF", logs });
-        logs.push("✅ Step 1: CSRF obtained");
-
-        await delay(1000, 2000);
+        if (!session.cookieValid) {
+            logs.push("❌ Invalid cookie - not logged in");
+            return res.status(401).json({ success: false, error: "Invalid cookie", logs });
+        }
+        
+        if (!session.boundAuthToken) {
+            logs.push("⚠️ Warning: Could not capture x-bound-auth-token");
+            logs.push("   This may cause 'blocksession' errors");
+        } else {
+            logs.push("✅ Step 1: Session established with auto-generated token");
+        }
+        
+        await randomDelay(1000, 2000);
 
         // Step 2: Trigger birthdate change
-        logs.push("🔄 Step 2: Trigger birthdate change...");
-        const changeRes = await curlRequest({ 
-            url: "https://users.roblox.com/v1/birthdate",
-            method: "POST", 
-            headers: buildHeaders(session), 
-            body: { 
-                birthMonth: parseInt(birthMonth), 
-                birthDay: parseInt(birthDay), 
+        logs.push("🔄 Step 2: Triggering birthdate change...");
+        
+        const changeRes = await makeApiRequest(
+            cookie,
+            "https://users.roblox.com/v1/birthdate",
+            "POST",
+            {
+                birthMonth: parseInt(birthMonth),
+                birthDay: parseInt(birthDay),
                 birthYear: parseInt(birthYear)
-            }, 
-            cookie 
-        });
+            },
+            session,
+            logs
+        );
         
         if (changeRes.status === 200) {
             logs.push("✅ Step 2: Success without challenge!");
-            return res.json({ 
-                success: true, 
-                message: "Birthdate changed!", 
-                newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, 
-                logs 
+            return res.json({
+                success: true,
+                message: "Birthdate changed!",
+                newBirthdate: { month: birthMonth, day: birthDay, year: birthYear },
+                logs
             });
         }
-
-        session.machineId = changeRes.headers["roblox-machine-id"];
-        if (session.machineId) logs.push(`✅ Machine ID: ${session.machineId}`);
 
         if (changeRes.status !== 403) {
-            logs.push(`❌ Step 2 failed: ${changeRes.status} - ${JSON.stringify(changeRes.data)}`);
-            return res.status(500).json({ 
-                success: false, 
-                error: `Status ${changeRes.status}`, 
-                logs 
-            });
+            logs.push(`❌ Step 2 failed: ${changeRes.status} - ${changeRes.body}`);
+            return res.status(500).json({ success: false, error: `Status ${changeRes.status}`, logs });
         }
 
-        const challengeId = changeRes.headers["rblx-challenge-id"];
-        const challengeType = changeRes.headers["rblx-challenge-type"];
-        const challengeMetadata = changeRes.headers["rblx-challenge-metadata"];
+        // Handle challenge flow
+        const challengeId = changeRes.headers['rblx-challenge-id'];
+        const challengeType = changeRes.headers['rblx-challenge-type'];
+        const challengeMetadata = changeRes.headers['rblx-challenge-metadata'];
 
-        if (!challengeId || !challengeType || !challengeMetadata) {
-            logs.push("❌ No challenge headers");
+        if (!challengeId || !challengeType) {
+            logs.push("❌ No challenge headers received");
             return res.status(500).json({ success: false, error: "No challenge", logs });
         }
 
-        logs.push(`✅ Step 2: Challenge triggered`);
+        logs.push(`✅ Step 2: Challenge triggered (${challengeType})`);
         logs.push(`   Challenge ID: ${challengeId}`);
-        logs.push(`   Challenge Type: ${challengeType}`);
 
-        let initialMetadata;
+        let initialMetadata = {};
         try {
-            const decodedMetadata = Buffer.from(challengeMetadata, 'base64').toString('utf8');
-            initialMetadata = JSON.parse(decodedMetadata);
-            logs.push(`   Decoded metadata: ${JSON.stringify(initialMetadata)}`);
-        } catch (e) {
-            logs.push(`⚠️ Failed to decode metadata: ${e.message}`);
-            initialMetadata = {};
-        }
+            initialMetadata = JSON.parse(Buffer.from(challengeMetadata, 'base64').toString());
+        } catch (e) {}
 
-        await delay(1500, 2500);
+        await randomDelay(1500, 2500);
 
         // Step 3: Continue challenge
-        logs.push("🔄 Step 3: Continue challenge...");
+        logs.push("🔄 Step 3: Continuing challenge...");
         
-        const contRes = await curlRequest({ 
-            url: "https://apis.roblox.com/challenge/v1/continue", 
-            method: "POST", 
-            headers: buildHeaders(session), 
-            body: { 
+        const contRes = await makeApiRequest(
+            cookie,
+            "https://apis.roblox.com/challenge/v1/continue",
+            "POST",
+            {
                 challengeID: challengeId,
+                challengeType: challengeType,
                 challengeMetadata: JSON.stringify({
                     userId: initialMetadata.userId,
                     challengeId: challengeId,
-                    browserTrackerId: initialMetadata.browserTrackerId || "1772875017937003"
-                }),
-                challengeType: challengeType
-            }, 
-            cookie 
-        });
+                    browserTrackerId: initialMetadata.browserTrackerId || Date.now().toString()
+                })
+            },
+            session,
+            logs
+        );
         
         if (contRes.status !== 200) {
-            logs.push(`❌ Step 3 failed: ${contRes.status} - ${JSON.stringify(contRes.data)}`);
+            logs.push(`❌ Step 3 failed: ${contRes.status} - ${contRes.body}`);
             return res.status(500).json({ success: false, error: "Continue failed", logs });
         }
 
         logs.push(`✅ Step 3: Challenge continued`);
-        logs.push(`   New Challenge Type: ${contRes.data.challengeType}`);
+        
+        const contData = contRes.data || {};
+        logs.push(`   New type: ${contData.challengeType}`);
 
-        const continueMetadata = JSON.parse(contRes.data.challengeMetadata);
-        const userId = continueMetadata.userId;
-        const innerChallengeId = continueMetadata.challengeId;
-        const actionType = continueMetadata.actionType || "Generic";
+        let contMetadata = {};
+        try {
+            contMetadata = JSON.parse(contData.challengeMetadata || '{}');
+        } catch (e) {}
 
-        logs.push(`   User ID: ${userId}`);
-        logs.push(`   Inner Challenge ID: ${innerChallengeId}`);
-        logs.push(`   Action Type: ${actionType}`);
-
-        await delay(2000, 3500);
+        await randomDelay(2000, 3500);
 
         // Step 4: Verify password
-        logs.push("🔄 Step 4: Verify password...");
-        const verifyRes = await curlRequest({ 
-            url: `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`, 
-            method: "POST", 
-            headers: buildHeaders(session), 
-            body: { 
-                challengeId: innerChallengeId, 
-                actionType: actionType,
-                code: password
-            }, 
-            cookie 
-        });
+        logs.push("🔄 Step 4: Verifying password...");
         
-        logs.push(`   Response: ${JSON.stringify(verifyRes.data)}`);
+        const verifyRes = await makeApiRequest(
+            cookie,
+            `https://twostepverification.roblox.com/v1/users/${contMetadata.userId}/challenges/password/verify`,
+            "POST",
+            {
+                challengeId: contMetadata.challengeId,
+                actionType: contMetadata.actionType || "Generic",
+                code: password
+            },
+            session,
+            logs
+        );
+        
+        logs.push(`   Response: ${verifyRes.body}`);
 
         if (verifyRes.status !== 200) {
             logs.push(`❌ Step 4 failed: ${verifyRes.status}`);
             return res.status(500).json({ success: false, error: "Verify failed", logs });
         }
 
-        const verificationToken = verifyRes.data.verificationToken;
+        const verificationToken = verifyRes.data?.verificationToken;
         if (!verificationToken) {
             logs.push("❌ No verification token");
-            return res.status(500).json({ success: false, error: "No verification token", logs });
+            return res.status(500).json({ success: false, error: "No token", logs });
         }
+        
         logs.push("✅ Step 4: Verified");
-
-        await delay(1500, 2500);
+        await randomDelay(1500, 2500);
 
         // Step 5: Complete challenge
-        logs.push("🔄 Step 5: Complete challenge...");
-        const completeRes = await curlRequest({ 
-            url: "https://apis.roblox.com/challenge/v1/continue", 
-            method: "POST", 
-            headers: buildHeaders(session), 
-            body: { 
-                challengeId: contRes.data.challengeId, 
-                challengeType: "twostepverification", 
-                challengeMetadata: JSON.stringify({ 
-                    rememberDevice: false, 
-                    actionType: actionType, 
-                    verificationToken: verificationToken, 
-                    challengeId: innerChallengeId 
-                }) 
-            }, 
-            cookie 
-        });
+        logs.push("🔄 Step 5: Completing challenge...");
+        
+        const completeRes = await makeApiRequest(
+            cookie,
+            "https://apis.roblox.com/challenge/v1/continue",
+            "POST",
+            {
+                challengeId: contData.challengeId,
+                challengeType: "twostepverification",
+                challengeMetadata: JSON.stringify({
+                    rememberDevice: false,
+                    actionType: contMetadata.actionType || "Generic",
+                    verificationToken: verificationToken,
+                    challengeId: contMetadata.challengeId
+                })
+            },
+            session,
+            logs
+        );
 
-        if (completeRes.status !== 200 || completeRes.data?.challengeType === "blocksession") {
-            logs.push(`❌ Step 5 blocked/failed: ${JSON.stringify(completeRes.data)}`);
-            return res.status(500).json({ success: false, error: "Challenge blocked", logs });
+        if (completeRes.data?.challengeType === "blocksession") {
+            logs.push(`❌ Step 5 blocked: ${completeRes.body}`);
+            return res.status(500).json({ success: false, error: "Challenge blocked - likely detection", logs });
         }
+        
+        if (completeRes.status !== 200) {
+            logs.push(`❌ Step 5 failed: ${completeRes.status} - ${completeRes.body}`);
+            return res.status(500).json({ success: false, error: "Complete failed", logs });
+        }
+        
         logs.push("✅ Step 5: Completed");
-
-        await delay(2000, 3000);
+        await randomDelay(2000, 3000);
 
         // Step 6: Final birthdate change
         logs.push("🔄 Step 6: Final birthdate change...");
         
         const finalMetadata = Buffer.from(JSON.stringify({
             rememberDevice: false,
-            actionType: actionType,
+            actionType: contMetadata.actionType || "Generic",
             verificationToken: verificationToken,
-            challengeId: innerChallengeId
+            challengeId: contMetadata.challengeId
         })).toString("base64");
         
-        const finalRes = await curlRequest({ 
-            url: "https://users.roblox.com/v1/birthdate",
-            method: "POST", 
-            headers: buildHeaders(session, { 
-                "rblx-challenge-id": contRes.data.challengeId, 
-                "rblx-challenge-type": "twostepverification",
-                "rblx-challenge-metadata": finalMetadata 
-            }), 
-            body: { 
-                birthMonth: parseInt(birthMonth), 
-                birthDay: parseInt(birthDay), 
+        // Add challenge headers to session temporarily
+        const finalSession = {
+            ...session,
+            challengeHeaders: {
+                'rblx-challenge-id': contData.challengeId,
+                'rblx-challenge-type': 'twostepverification',
+                'rblx-challenge-metadata': finalMetadata
+            }
+        };
+        
+        const finalRes = await makeApiRequest(
+            cookie,
+            "https://users.roblox.com/v1/birthdate",
+            "POST",
+            {
+                birthMonth: parseInt(birthMonth),
+                birthDay: parseInt(birthDay),
                 birthYear: parseInt(birthYear)
-            }, 
-            cookie 
-        });
+            },
+            finalSession,
+            logs
+        );
 
         if (finalRes.status !== 200) {
-            logs.push(`❌ Step 6 failed: ${finalRes.status} - ${JSON.stringify(finalRes.data)}`);
+            logs.push(`❌ Step 6 failed: ${finalRes.status} - ${finalRes.body}`);
             return res.status(500).json({ success: false, error: "Final failed", logs });
         }
 
         logs.push("✅ Step 6: Birthdate changed successfully!");
         logs.push("🎉 ALL DONE!");
 
-        res.json({ 
-            success: true, 
-            message: "Birthdate changed!", 
-            newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, 
-            logs 
+        res.json({
+            success: true,
+            message: "Birthdate changed!",
+            newBirthdate: { month: birthMonth, day: birthDay, year: birthYear },
+            logs
         });
 
     } catch (error) {
         console.error("Error:", error);
-        res.status(500).json({ success: false, error: error.message, logs: [error.stack] });
+        logs.push(`❌ Error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message, logs });
     }
 });
 
-app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", curlImpersonate: fs.existsSync(CURL_BINARY) });
+app.get("/api/health", async (req, res) => {
+    res.json({ 
+        status: "ok", 
+        puppeteer: true,
+        browserReady: browser !== null
+    });
 });
 
-function start() {
-    const hasBinary = checkBinary();
-    const PORT = process.env.PORT || 8080;
-    app.listen(PORT, "0.0.0.0", () => {
-        console.log(`🚀 Server on port ${PORT}`);
-        console.log(`🔒 curl-impersonate: ${hasBinary ? "✅" : "❌ (using system curl)"}`);
-        console.log(`🔑 Hardcoded x-bound-auth-token: ${HARDCODED_BOUND_TOKEN.substring(0, 30)}...`);
-    });
-}
+// Cleanup
+process.on('SIGINT', async () => {
+    if (browser) await browser.close();
+    process.exit(0);
+});
 
-start();
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Optimized Puppeteer Server on port ${PORT}`);
+    console.log(`🔑 Auto-generates x-bound-auth-token via Roblox JS`);
+});

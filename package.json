@@ -1,25 +1,32 @@
 {
-  "name": "roblox-birthdate-changer",
-  "version": "1.0.0",
-  "description": "Web application to change Roblox birthdate through secure backend proxy",
-  "main": "birthdate-server.js",
+  "name": "roblox-birthdate-changer-puppeteer",
+  "version": "2.0.0",
+  "description": "Web application to change Roblox birthdate using Puppeteer for stealth",
+  "main": "birthdate-server-puppeteer.js",
   "scripts": {
-    "start": "node birthdate-server.js",
-    "dev": "nodemon birthdate-server.js"
+    "start": "node birthdate-server-puppeteer.js",
+    "dev": "nodemon birthdate-server-puppeteer.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "keywords": [
     "roblox",
     "birthdate",
-    "api"
+    "puppeteer",
+    "automation"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.22.1",
-    "undici": "^6.0.0"
+    "puppeteer": "^24.2.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
