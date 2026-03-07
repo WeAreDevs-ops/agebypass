@@ -1,4 +1,4 @@
-// birthdate-server.js - Fixed with gzip decompression support
+// birthdate-server.js - Updated with reauthentication flow
 
 const express = require("express");
 const cors = require("cors");
@@ -30,6 +30,7 @@ function getSession(cookie) {
         sessions.set(key, {
             machineId: null,
             csrfToken: null,
+            reauthToken: null,  // NEW: Store reauth token
             fp: {
                 ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 secChUa: '"Not A(Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
@@ -45,7 +46,6 @@ function buildHeaders(session, extra = {}) {
         "User-Agent": session.fp.ua,
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        // Removed "Accept-Encoding": "gzip, deflate, br" - let curl handle it
         "Origin": "https://www.roblox.com",
         "Referer": "https://www.roblox.com/my/account#!/info",
         "sec-ch-ua": session.fp.secChUa,
@@ -68,13 +68,12 @@ function curlRequest(opts) {
         
         const curlPath = fs.existsSync(CURL_BINARY) ? CURL_BINARY : "curl";
         
-        // Added --compressed flag to handle gzip responses
         const args = [
             "--silent", 
             "--show-error", 
             "--location", 
             "--http1.1",
-            "--compressed",  // <-- HANDLES GZIP AUTOMATICALLY
+            "--compressed",
             "--request", method, 
             "--url", url
         ];
@@ -107,10 +106,9 @@ function curlRequest(opts) {
                 const headerBody = parts[0];
                 const status = parseInt(parts[1]?.trim() || "0");
                 
-                // Find header/body separator
                 let headerEnd = headerBody.indexOf("\r\n\r\n");
                 if (headerEnd === -1) {
-                    headerEnd = headerBody.indexOf("\n\n"); // Unix style
+                    headerEnd = headerBody.indexOf("\n\n");
                 }
                 if (headerEnd === -1) {
                     throw new Error("Cannot find end of headers");
@@ -119,7 +117,6 @@ function curlRequest(opts) {
                 const headerSection = headerBody.substring(0, headerEnd);
                 const body = headerBody.substring(headerEnd + 4);
                 
-                // Parse headers
                 const responseHeaders = {};
                 headerSection.split(/\r?\n/).forEach(line => {
                     if (line.includes(":")) {
@@ -128,7 +125,6 @@ function curlRequest(opts) {
                     }
                 });
                 
-                // Parse JSON body
                 let data = null;
                 if (body && body.trim()) {
                     try {
@@ -165,28 +161,57 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         // Step 1: CSRF
         logs.push("🔄 Step 1: CSRF...");
-        const csrfRes = await curlRequest({ url: "https://users.roblox.com/v1/description", method: "POST", headers: buildHeaders(session), body: { description: "test" }, cookie });
+        const csrfRes = await curlRequest({ 
+            url: "https://users.roblox.com/v1/description", 
+            method: "POST", 
+            headers: buildHeaders(session), 
+            body: { description: "test" }, 
+            cookie 
+        });
         session.csrfToken = csrfRes.headers["x-csrf-token"];
         if (!session.csrfToken) return res.status(403).json({ success: false, error: "No CSRF", logs });
         logs.push("✅ Step 1: CSRF obtained");
 
         await delay(1000, 2000);
 
-        // Step 2: Trigger
-        logs.push("🔄 Step 2: Trigger...");
-        const changeRes = await curlRequest({ url: "https://users.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
+        // Step 2: Trigger birthdate change (returns 403 with challenge)
+        logs.push("🔄 Step 2: Trigger birthdate change...");
+        const changeRes = await curlRequest({ 
+            url: "https://users.roblox.com/v1/birthdate",
+            method: "POST", 
+            headers: buildHeaders(session), 
+            body: { 
+                birthMonth: parseInt(birthMonth), 
+                birthDay: parseInt(birthDay), 
+                birthYear: parseInt(birthYear), 
+                password 
+            }, 
+            cookie 
+        });
         
+        // If 200, success without challenge
         if (changeRes.status === 200) {
-            logs.push("✅ Step 2: Success!");
-            return res.json({ success: true, message: "Birthdate changed!", newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, logs });
+            logs.push("✅ Step 2: Success without challenge!");
+            return res.json({ 
+                success: true, 
+                message: "Birthdate changed!", 
+                newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, 
+                logs 
+            });
         }
 
+        // Capture machine ID from response
         session.machineId = changeRes.headers["roblox-machine-id"];
         if (session.machineId) logs.push(`✅ Machine ID: ${session.machineId}`);
 
+        // Check if we got a challenge
         if (changeRes.status !== 403) {
-            logs.push(`❌ Step 2 failed: ${changeRes.status}`);
-            return res.status(500).json({ success: false, error: `Status ${changeRes.status}`, logs });
+            logs.push(`❌ Step 2 failed: ${changeRes.status} - ${JSON.stringify(changeRes.data)}`);
+            return res.status(500).json({ 
+                success: false, 
+                error: `Status ${changeRes.status}`, 
+                logs 
+            });
         }
 
         const challengeId = changeRes.headers["rblx-challenge-id"];
@@ -198,65 +223,101 @@ app.post("/api/change-birthdate", async (req, res) => {
             return res.status(500).json({ success: false, error: "No challenge", logs });
         }
 
-        logs.push(`✅ Step 2: Challenge ${challengeType}`);
+        logs.push(`✅ Step 2: Challenge triggered`);
+        logs.push(`   Challenge ID: ${challengeId}`);
+        logs.push(`   Challenge Type: ${challengeType}`);
 
         await delay(1500, 2500);
 
-        // Step 3: Continue
-        logs.push("🔄 Step 3: Continue...");
-        const contRes = await curlRequest({ url: "https://apis.roblox.com/challenge/v1/continue", method: "POST", headers: buildHeaders(session), body: { challengeId, challengeType, challengeMetadata }, cookie });
+        // NEW STEP 3: Generate reauthentication token
+        logs.push("🔄 Step 3: Generate reauthentication token...");
+        const reauthRes = await curlRequest({ 
+            url: "https://reauthentication.roblox.com/v1/token/generate",  // NEW API
+            method: "POST", 
+            headers: buildHeaders(session), 
+            body: { password: password }, 
+            cookie 
+        });
+        
+        if (reauthRes.status !== 200) {
+            logs.push(`❌ Step 3 failed: ${reauthRes.status} - ${JSON.stringify(reauthRes.data)}`);
+            return res.status(500).json({ 
+                success: false, 
+                error: "Reauthentication failed", 
+                logs 
+            });
+        }
+        
+        session.reauthToken = reauthRes.data.token;
+        logs.push(`✅ Step 3: Reauth token obtained`);
+        logs.push(`   Token: ${session.reauthToken.substring(0, 20)}...`);
+
+        await delay(1000, 2000);
+
+        // Step 4: Continue challenge with reauthentication token
+        logs.push("🔄 Step 4: Continue challenge with reauth token...");
+        const contRes = await curlRequest({ 
+            url: "https://apis.roblox.com/challenge/v1/continue", 
+            method: "POST", 
+            headers: buildHeaders(session), 
+            body: { 
+                challengeId: challengeId, 
+                challengeType: "reauthentication",  // CHANGED from "twostepverification"
+                challengeMetadata: JSON.stringify({
+                    reauthenticationToken: session.reauthToken  // NEW: Use reauth token
+                })
+            }, 
+            cookie 
+        });
+        
         if (contRes.status !== 200) {
-            logs.push(`❌ Step 3 failed: ${contRes.status}`);
+            logs.push(`❌ Step 4 failed: ${contRes.status} - ${JSON.stringify(contRes.data)}`);
             return res.status(500).json({ success: false, error: "Continue failed", logs });
         }
 
-        const contData = contRes.data;
-        const metadata = JSON.parse(contData.challengeMetadata);
-        logs.push("✅ Step 3: Continued");
+        logs.push(`✅ Step 4: Challenge continued`);
 
         await delay(2000, 3500);
 
-        // Step 4: Verify
-        logs.push("🔄 Step 4: Verify...");
-        const verifyRes = await curlRequest({ url: `https://twostepverification.roblox.com/v1/users/${metadata.userId}/challenges/password/verify`, method: "POST", headers: buildHeaders(session), body: { challengeId: metadata.challengeId, actionType: 7, code: password }, cookie });
+        // Step 5: Final birthdate change with challenge headers
+        logs.push("🔄 Step 5: Final birthdate change...");
         
-        if (verifyRes.status !== 200) {
-            logs.push(`❌ Step 4 failed: ${verifyRes.status}`);
-            return res.status(500).json({ success: false, error: "Verify failed", logs });
-        }
-
-        const verificationToken = verifyRes.data.verificationToken;
-        logs.push("✅ Step 4: Verified");
-
-        await delay(1500, 2500);
-
-        // Step 5: Complete
-        logs.push("🔄 Step 5: Complete...");
-        const completeRes = await curlRequest({ url: "https://apis.roblox.com/challenge/v1/continue", method: "POST", headers: buildHeaders(session), body: { challengeId: contData.challengeId, challengeType: "twostepverification", challengeMetadata: JSON.stringify({ rememberDevice: false, actionType: metadata.actionType || "Generic", verificationToken, challengeId: metadata.challengeId }) }, cookie });
-
-        if (completeRes.status !== 200 || completeRes.data?.challengeType === "blocksession") {
-            logs.push(`❌ Step 5 blocked/failed`);
-            return res.status(500).json({ success: false, error: "Challenge blocked", logs });
-        }
-        logs.push("✅ Step 5: Completed");
-
-        await delay(2000, 3000);
-
-        // Step 6: Final
-        logs.push("🔄 Step 6: Final...");
-        const finalMetadata = Buffer.from(JSON.stringify({ rememberDevice: false, actionType: "Generic", verificationToken, challengeId: metadata.challengeId })).toString("base64");
+        // Build challenge metadata for final request
+        const finalMetadata = Buffer.from(JSON.stringify({
+            reauthenticationToken: session.reauthToken
+        })).toString("base64");
         
-        const finalRes = await curlRequest({ url: "https://users.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session, { "rblx-challenge-id": contData.challengeId, "rblx-challenge-type": "twostepverification", "rblx-challenge-metadata": finalMetadata }), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
+        const finalRes = await curlRequest({ 
+            url: "https://users.roblox.com/v1/birthdate",
+            method: "POST", 
+            headers: buildHeaders(session, { 
+                "rblx-challenge-id": challengeId, 
+                "rblx-challenge-type": "reauthentication",  // CHANGED
+                "rblx-challenge-metadata": finalMetadata 
+            }), 
+            body: { 
+                birthMonth: parseInt(birthMonth), 
+                birthDay: parseInt(birthDay), 
+                birthYear: parseInt(birthYear), 
+                password 
+            }, 
+            cookie 
+        });
 
         if (finalRes.status !== 200) {
-            logs.push(`❌ Step 6 failed: ${finalRes.status}`);
+            logs.push(`❌ Step 5 failed: ${finalRes.status} - ${JSON.stringify(finalRes.data)}`);
             return res.status(500).json({ success: false, error: "Final failed", logs });
         }
 
-        logs.push("✅ Step 6: Success!");
+        logs.push("✅ Step 5: Birthdate changed successfully!");
         logs.push("🎉 ALL DONE!");
 
-        res.json({ success: true, message: "Birthdate changed!", newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, logs });
+        res.json({ 
+            success: true, 
+            message: "Birthdate changed!", 
+            newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, 
+            logs 
+        });
 
     } catch (error) {
         console.error("Error:", error);
