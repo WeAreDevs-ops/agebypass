@@ -5,7 +5,6 @@ const express = require("express");
 const cors = require("cors");
 const { spawn, exec } = require("child_process");
 const fs = require("fs");
-const path = require("path");
 const https = require("https");
 
 const app = express();
@@ -20,33 +19,74 @@ const sessions = new Map();
 // curl-impersonate path
 const CURL_IMPERSONATE_PATH = "/tmp/curl_chrome120";
 
-// Download file from URL
-function downloadFile(url, dest) {
+// Download file from URL with redirect following
+function downloadFile(url, dest, redirectCount = 0) {
     return new Promise((resolve, reject) => {
+        if (redirectCount > 5) {
+            reject(new Error("Too many redirects"));
+            return;
+        }
+
         const file = fs.createWriteStream(dest);
-        https.get(url, (response) => {
+        
+        const request = https.get(url, { 
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        }, (response) => {
+            // Handle redirects (301, 302, 307, 308)
+            if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                file.close();
+                fs.unlink(dest, () => {});
+                console.log(`Following redirect (${response.statusCode}) to: ${response.headers.location.substring(0, 100)}...`);
+                
+                // Handle relative URLs
+                let redirectUrl = response.headers.location;
+                if (redirectUrl.startsWith('/')) {
+                    const urlObj = new URL(url);
+                    redirectUrl = `${urlObj.protocol}//${urlObj.host}${redirectUrl}`;
+                }
+                
+                downloadFile(redirectUrl, dest, redirectCount + 1)
+                    .then(resolve)
+                    .catch(reject);
+                return;
+            }
+            
             if (response.statusCode !== 200) {
+                file.close();
+                fs.unlink(dest, () => {});
                 reject(new Error(`Download failed: ${response.statusCode}`));
                 return;
             }
+            
             response.pipe(file);
             file.on("finish", () => {
                 file.close();
                 resolve();
             });
-        }).on("error", (err) => {
+        });
+
+        request.on("error", (err) => {
+            file.close();
             fs.unlink(dest, () => {});
             reject(err);
+        });
+        
+        request.setTimeout(60000, () => {
+            request.destroy();
+            file.close();
+            fs.unlink(dest, () => {});
+            reject(new Error("Download timeout"));
         });
     });
 }
 
 // Setup curl-impersonate
 async function setupCurlImpersonate() {
-    // Check if already exists
     if (fs.existsSync(CURL_IMPERSONATE_PATH)) {
         console.log(`✅ curl-impersonate already exists at ${CURL_IMPERSONATE_PATH}`);
-        return;
+        return true;
     }
 
     console.log("⬇️ Downloading curl-impersonate for Linux x64...");
@@ -55,23 +95,30 @@ async function setupCurlImpersonate() {
         const downloadUrl = "https://github.com/lwthiker/curl-impersonate/releases/download/v0.6.1/curl-impersonate-v0.6.1.x86_64-linux-gnu.tar.gz";
         const tarPath = "/tmp/curl-impersonate.tar.gz";
         
-        // Download tarball
-        await downloadFile(downloadUrl, tarPath);
-        console.log("📦 Downloaded tarball");
+        console.log(`   From: ${downloadUrl}`);
         
-        // Extract using system tar
+        await downloadFile(downloadUrl, tarPath);
+        console.log("📦 Downloaded successfully");
+        
+        // Extract
         await new Promise((resolve, reject) => {
-            exec(`cd /tmp && tar -xzf curl-impersonate.tar.gz && chmod +x curl_chrome120`, (error) => {
+            exec(`cd /tmp && tar -xzf curl-impersonate.tar.gz && chmod +x curl_chrome120 && rm -f curl-impersonate.tar.gz`, (error) => {
                 if (error) reject(error);
                 else resolve();
             });
         });
         
-        console.log("✅ curl-impersonate extracted and ready");
+        if (fs.existsSync(CURL_IMPERSONATE_PATH)) {
+            console.log("✅ curl-impersonate ready");
+            return true;
+        } else {
+            throw new Error("Binary not found after extraction");
+        }
         
     } catch (error) {
         console.error("❌ Failed to setup curl-impersonate:", error.message);
-        console.log("⚠️ Will fallback to native fetch (may be detected by Roblox)");
+        console.log("⚠️ Will use system curl (may be detected by Roblox)");
+        return false;
     }
 }
 
@@ -93,117 +140,70 @@ function getSession(cookie) {
     return sessions.get(sessionKey);
 }
 
-// Execute curl-impersonate request
+// Execute curl request
 function curlRequest(options) {
     return new Promise((resolve, reject) => {
-        const {
-            url,
-            method = "GET",
-            headers = {},
-            body = null,
-            cookie = null,
-        } = options;
+        const { url, method = "GET", headers = {}, body = null, cookie = null } = options;
 
-        // Check if curl-impersonate exists
         const curlPath = fs.existsSync(CURL_IMPERSONATE_PATH) 
             ? CURL_IMPERSONATE_PATH 
-            : "curl"; // Fallback to system curl
+            : "curl";
 
         const args = [
-            "--silent",
-            "--show-error",
-            "--location",
-            "--http1.1",
-            "--request", method,
-            "--url", url,
+            "--silent", "--show-error", "--location", "--http1.1",
+            "--request", method, "--url", url,
         ];
 
-        // Add headers
         Object.entries(headers).forEach(([key, value]) => {
-            if (value !== null && value !== undefined) {
-                args.push("--header", `${key}: ${value}`);
-            }
+            if (value != null) args.push("--header", `${key}: ${value}`);
         });
 
-        // Add cookie
         if (cookie) {
-            const roblosecurity = cookie.startsWith(".ROBLOSECURITY=")
-                ? cookie
-                : `.ROBLOSECURITY=${cookie}`;
+            const roblosecurity = cookie.startsWith(".ROBLOSECURITY=") ? cookie : `.ROBLOSECURITY=${cookie}`;
             args.push("--cookie", roblosecurity);
         }
 
-        // Add body for POST/PATCH
-        if (body) {
-            args.push("--data", JSON.stringify(body));
-        }
+        if (body) args.push("--data", JSON.stringify(body));
+        args.push("--dump-header", "-", "--write-out", "\nHTTP_CODE:%{http_code}");
 
-        // Include response headers in output
-        args.push("--dump-header", "-");
-        args.push("--write-out", "\nHTTP_CODE:%{http_code}");
+        const proc = spawn(curlPath, args, { env: process.env });
+        let stdout = "", stderr = "";
 
-        const proc = spawn(curlPath, args, {
-            env: { ...process.env },
-        });
-
-        let stdout = "";
-        let stderr = "";
-
-        proc.stdout.on("data", (data) => {
-            stdout += data.toString();
-        });
-
-        proc.stderr.on("data", (data) => {
-            stderr += data.toString();
-        });
-
-        proc.on("error", (error) => {
-            reject(new Error(`Failed to spawn curl: ${error.message}`));
-        });
-
+        proc.stdout.on("data", (data) => { stdout += data.toString(); });
+        proc.stderr.on("data", (data) => { stderr += data.toString(); });
+        proc.on("error", (err) => reject(err));
+        
         proc.on("close", (code) => {
-            if (code !== 0) {
-                return reject(new Error(`curl exited with code ${code}: ${stderr}`));
-            }
-
+            if (code !== 0) return reject(new Error(`curl failed: ${stderr}`));
+            
             try {
-                // Parse response
                 const parts = stdout.split("HTTP_CODE:");
                 const headersAndBody = parts[0];
                 const httpCode = parseInt(parts[1]?.trim() || "0");
-
-                // Split headers and body
                 const headerEnd = headersAndBody.indexOf("\r\n\r\n");
                 const headerSection = headersAndBody.substring(0, headerEnd);
                 const body = headersAndBody.substring(headerEnd + 4);
 
-                // Parse headers
                 const responseHeaders = {};
                 headerSection.split("\r\n").forEach(line => {
                     if (line.includes(":")) {
-                        const [key, ...valueParts] = line.split(":");
-                        responseHeaders[key.toLowerCase().trim()] = valueParts.join(":").trim();
+                        const [key, ...val] = line.split(":");
+                        responseHeaders[key.toLowerCase().trim()] = val.join(":").trim();
                     }
                 });
 
-                resolve({
-                    status: httpCode,
-                    headers: responseHeaders,
-                    body: body,
-                    data: body ? JSON.parse(body) : null,
-                });
-            } catch (parseError) {
-                reject(new Error(`Failed to parse response: ${parseError.message}`));
+                resolve({ status: httpCode, headers: responseHeaders, body, data: body ? JSON.parse(body) : null });
+            } catch (e) {
+                reject(new Error(`Parse error: ${e.message}`));
             }
         });
     });
 }
 
-// Build headers with consistent fingerprint
-function buildHeaders(session, extraHeaders = {}) {
+// Build headers
+function buildHeaders(session, extra = {}) {
     const fp = session.fingerprint;
-
-    const headers = {
+    const h = {
         "Content-Type": "application/json",
         "User-Agent": fp.userAgent,
         "Accept": "application/json, text/plain, */*",
@@ -220,327 +220,161 @@ function buildHeaders(session, extraHeaders = {}) {
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     };
-
-    if (session.csrfToken) {
-        headers["x-csrf-token"] = session.csrfToken;
-    }
-
-    if (session.machineId) {
-        headers["roblox-machine-id"] = session.machineId;
-    }
-
-    Object.assign(headers, extraHeaders);
-
-    return headers;
+    if (session.csrfToken) h["x-csrf-token"] = session.csrfToken;
+    if (session.machineId) h["roblox-machine-id"] = session.machineId;
+    return Object.assign(h, extra);
 }
 
-// Delay helper
 function delay(min, max) {
-    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise(r => setTimeout(r, Math.floor(Math.random() * (max - min + 1)) + min));
 }
 
 // Main endpoint
 app.post("/api/change-birthdate", async (req, res) => {
     try {
         const { cookie, password, birthMonth, birthDay, birthYear } = req.body;
-
         if (!cookie || !password || !birthMonth || !birthDay || !birthYear) {
-            return res.status(400).json({
-                success: false,
-                error: "Missing required fields",
-            });
+            return res.status(400).json({ success: false, error: "Missing fields" });
         }
 
-        const logs = [];
-        const session = getSession(cookie);
-        
-        logs.push(`🔐 Session initialized`);
-        logs.push(`   Using: ${fs.existsSync(CURL_IMPERSONATE_PATH) ? 'curl-impersonate (Chrome TLS)' : 'system curl'}`);
+        const logs = [], session = getSession(cookie);
+        logs.push(`🔐 Session: ${fs.existsSync(CURL_IMPERSONATE_PATH) ? "curl-impersonate" : "system curl"}`);
 
-        // STEP 1: Get CSRF Token
-        logs.push("🔄 Step 1: Getting CSRF token...");
-        
-        const csrfResponse = await curlRequest({
-            url: "https://users.roblox.com/v1/description",
-            method: "POST",
-            headers: buildHeaders(session),
-            body: { description: "test" },
-            cookie: cookie,
-        });
-
-        const csrfToken = csrfResponse.headers["x-csrf-token"];
-        if (!csrfToken) {
-            return res.status(403).json({
-                success: false,
-                error: "Failed to get CSRF token. Invalid cookie?",
-                logs,
-            });
-        }
-
-        session.csrfToken = csrfToken;
-        logs.push("✅ Step 1: CSRF token obtained");
+        // Step 1: CSRF
+        logs.push("🔄 Step 1: Getting CSRF...");
+        const csrfRes = await curlRequest({ url: "https://users.roblox.com/v1/description", method: "POST", headers: buildHeaders(session), body: { description: "test" }, cookie });
+        session.csrfToken = csrfRes.headers["x-csrf-token"];
+        if (!session.csrfToken) return res.status(403).json({ success: false, error: "No CSRF", logs });
+        logs.push("✅ Step 1: CSRF obtained");
 
         await delay(1000, 2000);
 
-        // STEP 2: Trigger Challenge
-        logs.push("🔄 Step 2: Sending birthdate change request...");
-
-        const changeResponse = await curlRequest({
-            url: "https://users.roblox.com/v1/birthdate",
-            method: "POST",
-            headers: buildHeaders(session),
-            body: {
-                birthMonth: parseInt(birthMonth),
-                birthDay: parseInt(birthDay),
-                birthYear: parseInt(birthYear),
-                password: password,
-            },
-            cookie: cookie,
-        });
-
-        const machineId = changeResponse.headers["roblox-machine-id"];
-        if (machineId) {
-            session.machineId = machineId;
-            logs.push(`✅ Machine ID LOCKED: ${machineId}`);
+        // Step 2: Trigger
+        logs.push("🔄 Step 2: Triggering challenge...");
+        const changeRes = await curlRequest({ url: "https://users.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
+        
+        if (changeRes.status === 200) {
+            logs.push("✅ Step 2: Success without challenge!");
+            return res.json({ success: true, message: "Birthdate changed!", newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, logs });
         }
 
-        if (changeResponse.status === 200) {
-            logs.push("✅ Step 2: Birthdate changed without challenge!");
-            return res.json({
-                success: true,
-                message: "Birthdate changed successfully!",
-                newBirthdate: { month: birthMonth, day: birthDay, year: birthYear },
-                logs,
-            });
+        session.machineId = changeRes.headers["roblox-machine-id"];
+        if (session.machineId) logs.push(`✅ Machine ID: ${session.machineId}`);
+
+        if (changeRes.status !== 403) {
+            logs.push(`❌ Step 2 failed: ${changeRes.status}`);
+            return res.status(500).json({ success: false, error: `Status ${changeRes.status}`, logs });
         }
 
-        if (changeResponse.status !== 403) {
-            logs.push(`❌ Step 2 failed: ${changeResponse.status}`);
-            return res.status(500).json({
-                success: false,
-                error: `Unexpected response: ${changeResponse.status}`,
-                logs,
-            });
-        }
-
-        const challengeId = changeResponse.headers["rblx-challenge-id"];
-        const challengeType = changeResponse.headers["rblx-challenge-type"];
-        const challengeMetadata = changeResponse.headers["rblx-challenge-metadata"];
+        const challengeId = changeRes.headers["rblx-challenge-id"];
+        const challengeType = changeRes.headers["rblx-challenge-type"];
+        const challengeMetadata = changeRes.headers["rblx-challenge-metadata"];
 
         if (!challengeId || !challengeType || !challengeMetadata) {
-            logs.push(`❌ Challenge headers missing`);
-            return res.status(500).json({
-                success: false,
-                error: "Challenge headers not found",
-                logs,
-            });
+            logs.push("❌ No challenge headers");
+            return res.status(500).json({ success: false, error: "No challenge headers", logs });
         }
 
-        logs.push("✅ Step 2: Challenge triggered");
-        logs.push(`   Challenge ID: ${challengeId}`);
-        logs.push(`   Challenge Type: ${challengeType}`);
+        logs.push(`✅ Step 2: Challenge ${challengeType}`);
 
         await delay(1500, 2500);
 
-        // STEP 3: Continue Challenge
-        logs.push("🔄 Step 3: Continuing challenge...");
-
-        const continueResponse = await curlRequest({
-            url: "https://apis.roblox.com/challenge/v1/continue",
-            method: "POST",
-            headers: buildHeaders(session),
-            body: { challengeId, challengeType, challengeMetadata },
-            cookie: cookie,
-        });
-
-        if (continueResponse.status !== 200) {
-            logs.push(`❌ Step 3 failed: ${continueResponse.status}`);
-            return res.status(500).json({
-                success: false,
-                error: `Challenge continue failed: ${continueResponse.status}`,
-                logs,
-            });
+        // Step 3: Continue
+        logs.push("🔄 Step 3: Continuing...");
+        const contRes = await curlRequest({ url: "https://apis.roblox.com/challenge/v1/continue", method: "POST", headers: buildHeaders(session), body: { challengeId, challengeType, challengeMetadata }, cookie });
+        if (contRes.status !== 200) {
+            logs.push(`❌ Step 3 failed: ${contRes.status}`);
+            return res.status(500).json({ success: false, error: "Continue failed", logs });
         }
 
-        const continueData = continueResponse.data;
-        logs.push("✅ Step 3: Challenge continued");
-        
-        const metadata = JSON.parse(continueData.challengeMetadata);
-        const userId = metadata.userId;
-        const innerChallengeId = metadata.challengeId;
-
-        logs.push(`   User ID: ${userId}`);
-        logs.push(`   Inner Challenge ID: ${innerChallengeId}`);
+        const contData = contRes.data;
+        const metadata = JSON.parse(contData.challengeMetadata);
+        logs.push("✅ Step 3: Continued");
 
         await delay(2000, 3500);
 
-        // STEP 4: Verify Password
+        // Step 4: Verify password
         logs.push("🔄 Step 4: Verifying password...");
-
-        const verifyResponse = await curlRequest({
-            url: `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
-            method: "POST",
-            headers: buildHeaders(session),
-            body: {
-                challengeId: innerChallengeId,
-                actionType: 7,
-                code: password,
-            },
-            cookie: cookie,
+        const verifyRes = await curlRequest({ 
+            url: `https://twostepverification.roblox.com/v1/users/${metadata.userId}/challenges/password/verify`, 
+            method: "POST", 
+            headers: buildHeaders(session), 
+            body: { challengeId: metadata.challengeId, actionType: 7, code: password }, 
+            cookie 
         });
 
-        logs.push(`   Response: ${JSON.stringify(verifyResponse.data)}`);
-
-        if (verifyResponse.status !== 200) {
-            logs.push(`❌ Step 4 failed: ${verifyResponse.status}`);
-            return res.status(500).json({
-                success: false,
-                error: `Password verification failed`,
-                logs,
-            });
+        if (verifyRes.status !== 200) {
+            logs.push(`❌ Step 4 failed: ${verifyRes.status}`);
+            return res.status(500).json({ success: false, error: "Password verify failed", logs });
         }
 
-        const verificationToken = verifyResponse.data.verificationToken;
-        if (!verificationToken) {
-            logs.push("❌ No verification token");
-            return res.status(500).json({
-                success: false,
-                error: "No verification token",
-                logs,
-            });
-        }
-
-        logs.push("✅ Step 4: Password verified");
+        const verificationToken = verifyRes.data.verificationToken;
+        logs.push("✅ Step 4: Verified");
 
         await delay(1500, 2500);
 
-        // STEP 5: Complete Challenge
-        logs.push("🔄 Step 5: Completing challenge...");
-
-        const step5Metadata = {
-            rememberDevice: false,
-            actionType: metadata.actionType || "Generic",
-            verificationToken: verificationToken,
-            challengeId: innerChallengeId,
-        };
-
-        const completeResponse = await curlRequest({
-            url: "https://apis.roblox.com/challenge/v1/continue",
-            method: "POST",
-            headers: buildHeaders(session),
-            body: {
-                challengeId: continueData.challengeId,
-                challengeType: "twostepverification",
-                challengeMetadata: JSON.stringify(step5Metadata),
-            },
-            cookie: cookie,
+        // Step 5: Complete
+        logs.push("🔄 Step 5: Completing...");
+        const completeRes = await curlRequest({ 
+            url: "https://apis.roblox.com/challenge/v1/continue", 
+            method: "POST", 
+            headers: buildHeaders(session), 
+            body: { 
+                challengeId: contData.challengeId, 
+                challengeType: "twostepverification", 
+                challengeMetadata: JSON.stringify({ rememberDevice: false, actionType: metadata.actionType || "Generic", verificationToken, challengeId: metadata.challengeId }) 
+            }, 
+            cookie 
         });
 
-        logs.push(`   Response: ${JSON.stringify(completeResponse.data)}`);
-
-        if (completeResponse.status !== 200) {
-            logs.push(`❌ Step 5 failed: ${completeResponse.status}`);
-            return res.status(500).json({
-                success: false,
-                error: `Challenge completion failed`,
-                logs,
-            });
+        if (completeRes.status !== 200 || completeRes.data?.challengeType === "blocksession") {
+            logs.push(`❌ Step 5 failed/blocked`);
+            return res.status(500).json({ success: false, error: "Challenge blocked", logs });
         }
-
-        if (completeResponse.data?.challengeType === "blocksession" ||
-            JSON.stringify(completeResponse.data).includes("Denied")) {
-            logs.push("🚫 Step 5 returned blocksession!");
-            return res.status(500).json({
-                success: false,
-                error: "Challenge blocked by Roblox",
-                logs,
-            });
-        }
-
-        logs.push("✅ Step 5: Challenge completed");
+        logs.push("✅ Step 5: Completed");
 
         await delay(2000, 3000);
 
-        // STEP 6: Final Birthdate Change
-        logs.push("🔄 Step 6: Final birthdate change...");
-
-        const finalMetadata = {
-            rememberDevice: false,
-            actionType: "Generic",
-            verificationToken: verificationToken,
-            challengeId: innerChallengeId,
-        };
-        const finalMetadataBase64 = Buffer.from(JSON.stringify(finalMetadata)).toString("base64");
-
-        const finalHeaders = buildHeaders(session, {
-            "rblx-challenge-id": continueData.challengeId,
-            "rblx-challenge-type": "twostepverification",
-            "rblx-challenge-metadata": finalMetadataBase64,
+        // Step 6: Final
+        logs.push("🔄 Step 6: Final request...");
+        const finalMetadata = Buffer.from(JSON.stringify({ rememberDevice: false, actionType: "Generic", verificationToken, challengeId: metadata.challengeId })).toString("base64");
+        
+        const finalRes = await curlRequest({ 
+            url: "https://users.roblox.com/v1/birthdate", 
+            method: "POST", 
+            headers: buildHeaders(session, { "rblx-challenge-id": contData.challengeId, "rblx-challenge-type": "twostepverification", "rblx-challenge-metadata": finalMetadata }), 
+            body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, 
+            cookie 
         });
 
-        const finalResponse = await curlRequest({
-            url: "https://users.roblox.com/v1/birthdate",
-            method: "POST",
-            headers: finalHeaders,
-            body: {
-                birthMonth: parseInt(birthMonth),
-                birthDay: parseInt(birthDay),
-                birthYear: parseInt(birthYear),
-                password: password,
-            },
-            cookie: cookie,
-        });
-
-        logs.push(`   Response: ${JSON.stringify(finalResponse.data)}`);
-
-        if (finalResponse.status !== 200) {
-            logs.push(`❌ Step 6 failed: ${finalResponse.status}`);
-            return res.status(500).json({
-                success: false,
-                error: `Final request failed: ${finalResponse.status}`,
-                logs,
-            });
+        if (finalRes.status !== 200) {
+            logs.push(`❌ Step 6 failed: ${finalRes.status}`);
+            return res.status(500).json({ success: false, error: "Final failed", logs });
         }
 
-        logs.push("✅ Step 6: Birthdate changed successfully!");
-        logs.push("🎉 ALL STEPS COMPLETED!");
+        logs.push("✅ Step 6: Success!");
+        logs.push("🎉 ALL COMPLETE!");
 
-        return res.json({
-            success: true,
-            message: "Birthdate changed successfully!",
-            newBirthdate: { month: birthMonth, day: birthDay, year: birthYear },
-            logs,
-        });
+        res.json({ success: true, message: "Birthdate changed!", newBirthdate: { month: birthMonth, day: birthDay, year: birthYear }, logs });
 
     } catch (error) {
         console.error("Error:", error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            logs: [error.stack],
-        });
+        res.status(500).json({ success: false, error: error.message, logs: [error.stack] });
     }
 });
 
-// Health check
 app.get("/api/health", (req, res) => {
-    res.json({ 
-        status: "ok", 
-        curlImpersonate: fs.existsSync(CURL_IMPERSONATE_PATH),
-        message: "Server running" 
-    });
+    res.json({ status: "ok", curlImpersonate: fs.existsSync(CURL_IMPERSONATE_PATH) });
 });
 
-// Initialize and start server
-async function startServer() {
+// Start
+async function start() {
     await setupCurlImpersonate();
-    
     const PORT = process.env.PORT || 8080;
     app.listen(PORT, "0.0.0.0", () => {
-        console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-        console.log(`🔒 curl-impersonate: ${fs.existsSync(CURL_IMPERSONATE_PATH) ? '✅ Ready' : '❌ Not available (using system curl)'}`);
+        console.log(`🚀 Server running on port ${PORT}`);
+        console.log(`🔒 Using: ${fs.existsSync(CURL_IMPERSONATE_PATH) ? "curl-impersonate ✅" : "system curl ⚠️"}`);
     });
 }
 
-startServer();
+start();
