@@ -481,7 +481,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         const retryResult = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
-                method: "PATCH",
+                method: "POST",
                 headers: step6Headers,
                 body: JSON.stringify({
                     birthMonth: parseInt(birthMonth),
