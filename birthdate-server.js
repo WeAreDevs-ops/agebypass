@@ -1,10 +1,10 @@
 // birthdate-server.js - Node.js Backend for Roblox Birthdate Changer
-// Using curl-impersonate to bypass TLS fingerprinting (JA3 detection)
-// Install dependencies: npm install express cors cuimp
+// Using curl-impersonate via child_process for Chrome TLS fingerprint
+// Install dependencies: npm install express cors
 
 const express = require("express");
 const cors = require("cors");
-const { request: cuimpRequest, createCuimpHttp } = require("cuimp");
+const { spawn } = require("child_process");
 
 const app = express();
 
@@ -12,52 +12,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// Store session data including machine ID and fingerprint
+// Store session data
 const sessions = new Map();
-
-// Create a cuimp HTTP client that impersonates Chrome
-// This is CRITICAL - it gives us Chrome's JA3 TLS fingerprint
-function createChromeClient(cookie, machineId = null, csrfToken = null) {
-    const client = createCuimpHttp({
-        descriptor: { browser: "chrome", version: "120" }, // Match your User-Agent version
-    });
-
-    // Set default headers that will be consistent across all requests
-    client.defaults.headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Origin": "https://www.roblox.com",
-        "Referer": "https://www.roblox.com/my/account#!/info", // Correct referer for settings page
-        "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    };
-
-    // Add cookie
-    const roblosecurity = cookie.startsWith(".ROBLOSECURITY=")
-        ? cookie
-        : `.ROBLOSECURITY=${cookie}`;
-    client.defaults.headers["Cookie"] = roblosecurity;
-
-    // Add machine ID if available
-    if (machineId) {
-        client.defaults.headers["roblox-machine-id"] = machineId;
-    }
-
-    // Add CSRF token if available
-    if (csrfToken) {
-        client.defaults.headers["x-csrf-token"] = csrfToken;
-    }
-
-    return client;
-}
 
 // Get or create session
 function getSession(cookie) {
@@ -66,10 +22,149 @@ function getSession(cookie) {
         sessions.set(sessionKey, {
             machineId: null,
             csrfToken: null,
-            client: null, // Will store cuimp client
+            fingerprint: {
+                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                secChUa: '"Not A(Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                secChUaMobile: "?0",
+                secChUaPlatform: '"Windows"',
+            }
         });
     }
     return sessions.get(sessionKey);
+}
+
+// Execute curl-impersonate request
+function curlRequest(options) {
+    return new Promise((resolve, reject) => {
+        const {
+            url,
+            method = "GET",
+            headers = {},
+            body = null,
+            cookie = null,
+        } = options;
+
+        // Build curl-impersonate command
+        const args = [
+            "--silent",
+            "--show-error",
+            "--location",
+            "--http1.1",
+            "--request", method,
+            "--url", url,
+        ];
+
+        // Add headers
+        Object.entries(headers).forEach(([key, value]) => {
+            if (value !== null && value !== undefined) {
+                args.push("--header", `${key}: ${value}`);
+            }
+        });
+
+        // Add cookie
+        if (cookie) {
+            const roblosecurity = cookie.startsWith(".ROBLOSECURITY=")
+                ? cookie
+                : `.ROBLOSECURITY=${cookie}`;
+            args.push("--cookie", roblosecurity);
+        }
+
+        // Add body for POST/PATCH
+        if (body) {
+            args.push("--data", JSON.stringify(body));
+        }
+
+        // Include response headers in output
+        args.push("--dump-header", "-");
+        args.push("--write-out", "\nHTTP_CODE:%{http_code}");
+
+        // Spawn curl-impersonate process
+        const curlPath = process.env.CURL_IMPERSONATE || "curl_chrome120";
+        const proc = spawn(curlPath, args, {
+            env: { ...process.env },
+        });
+
+        let stdout = "";
+        let stderr = "";
+
+        proc.stdout.on("data", (data) => {
+            stdout += data.toString();
+        });
+
+        proc.stderr.on("data", (data) => {
+            stderr += data.toString();
+        });
+
+        proc.on("close", (code) => {
+            if (code !== 0) {
+                return reject(new Error(`curl exited with code ${code}: ${stderr}`));
+            }
+
+            // Parse response
+            const parts = stdout.split("HTTP_CODE:");
+            const headersAndBody = parts[0];
+            const httpCode = parseInt(parts[1]?.trim() || "0");
+
+            // Split headers and body
+            const headerEnd = headersAndBody.indexOf("\r\n\r\n");
+            const headerSection = headersAndBody.substring(0, headerEnd);
+            const body = headersAndBody.substring(headerEnd + 4);
+
+            // Parse headers
+            const responseHeaders = {};
+            headerSection.split("\r\n").forEach(line => {
+                if (line.includes(":")) {
+                    const [key, ...valueParts] = line.split(":");
+                    responseHeaders[key.toLowerCase().trim()] = valueParts.join(":").trim();
+                }
+            });
+
+            resolve({
+                status: httpCode,
+                headers: responseHeaders,
+                body: body,
+                data: body ? JSON.parse(body) : null,
+            });
+        });
+    });
+}
+
+// Build headers with consistent fingerprint
+function buildHeaders(session, extraHeaders = {}) {
+    const fp = session.fingerprint;
+
+    const headers = {
+        "Content-Type": "application/json",
+        "User-Agent": fp.userAgent,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Origin": "https://www.roblox.com",
+        "Referer": "https://www.roblox.com/my/account#!/info",
+        "sec-ch-ua": fp.secChUa,
+        "sec-ch-ua-mobile": fp.secChUaMobile,
+        "sec-ch-ua-platform": fp.secChUaPlatform,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    };
+
+    // Add CSRF token if available
+    if (session.csrfToken) {
+        headers["x-csrf-token"] = session.csrfToken;
+    }
+
+    // Add machine ID if available
+    if (session.machineId) {
+        headers["roblox-machine-id"] = session.machineId;
+    }
+
+    // Merge extra headers
+    Object.assign(headers, extraHeaders);
+
+    return headers;
 }
 
 // Delay helper
@@ -94,19 +189,19 @@ app.post("/api/change-birthdate", async (req, res) => {
         const session = getSession(cookie);
         
         logs.push(`🔐 Session initialized`);
-        logs.push(`   Using curl-impersonate (Chrome 120) for TLS fingerprinting`);
+        logs.push(`   Using curl-impersonate (Chrome 120 TLS fingerprint)`);
 
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
         
-        // Create client for initial request (no machine ID yet)
-        let client = createChromeClient(cookie);
-        
-        const csrfResponse = await client.post("https://users.roblox.com/v1/description", {
-            description: "test",
+        const csrfResponse = await curlRequest({
+            url: "https://users.roblox.com/v1/description",
+            method: "POST",
+            headers: buildHeaders(session),
+            body: { description: "test" },
+            cookie: cookie,
         });
 
-        // Capture CSRF token from response headers
         const csrfToken = csrfResponse.headers["x-csrf-token"];
         if (!csrfToken) {
             return res.status(403).json({
@@ -124,18 +219,20 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 2: Trigger Challenge (CAPTURE MACHINE ID HERE!)
         logs.push("🔄 Step 2: Sending birthdate change request...");
 
-        // Update client with CSRF token
-        client = createChromeClient(cookie, null, csrfToken);
-        session.client = client;
-
-        const changeResponse = await client.post("https://users.roblox.com/v1/birthdate", {
-            birthMonth: parseInt(birthMonth),
-            birthDay: parseInt(birthDay),
-            birthYear: parseInt(birthYear),
-            password: password,
+        const changeResponse = await curlRequest({
+            url: "https://users.roblox.com/v1/birthdate",
+            method: "POST",
+            headers: buildHeaders(session),
+            body: {
+                birthMonth: parseInt(birthMonth),
+                birthDay: parseInt(birthDay),
+                birthYear: parseInt(birthYear),
+                password: password,
+            },
+            cookie: cookie,
         });
 
-        // Capture machine ID from response headers
+        // Capture machine ID from response
         const machineId = changeResponse.headers["roblox-machine-id"];
         if (machineId) {
             session.machineId = machineId;
@@ -144,7 +241,7 @@ app.post("/api/change-birthdate", async (req, res) => {
             logs.push("⚠️ Warning: No machine ID in Step 2 response");
         }
 
-        // Check status
+        // Check if success (no challenge needed)
         if (changeResponse.status === 200) {
             logs.push("✅ Step 2: Birthdate changed without challenge!");
             return res.json({
@@ -155,6 +252,7 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
+        // If not 403, it's an error
         if (changeResponse.status !== 403) {
             logs.push(`❌ Step 2 failed: ${changeResponse.status} - ${JSON.stringify(changeResponse.data)}`);
             return res.status(500).json({
@@ -184,16 +282,19 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         await delay(1500, 2500);
 
-        // STEP 3: Continue Challenge (USE SAME MACHINE ID!)
+        // STEP 3: Continue Challenge
         logs.push("🔄 Step 3: Continuing challenge...");
 
-        // Create new client with machine ID and CSRF token
-        client = createChromeClient(cookie, session.machineId, session.csrfToken);
-        
-        const continueResponse = await client.post("https://apis.roblox.com/challenge/v1/continue", {
-            challengeId,
-            challengeType,
-            challengeMetadata,
+        const continueResponse = await curlRequest({
+            url: "https://apis.roblox.com/challenge/v1/continue",
+            method: "POST",
+            headers: buildHeaders(session),
+            body: {
+                challengeId,
+                challengeType,
+                challengeMetadata,
+            },
+            cookie: cookie,
         });
 
         if (continueResponse.status !== 200) {
@@ -220,7 +321,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         await delay(2000, 3500);
 
-        // STEP 4: Verify Password (USE SAME MACHINE ID!)
+        // STEP 4: Verify Password
         logs.push("🔄 Step 4: Verifying password...");
 
         const verifyBody = {
@@ -230,11 +331,13 @@ app.post("/api/change-birthdate", async (req, res) => {
         };
         logs.push(`   Request Body: ${JSON.stringify(verifyBody)}`);
 
-        // Use same client (has machine ID and CSRF)
-        const verifyResponse = await client.post(
-            `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
-            verifyBody
-        );
+        const verifyResponse = await curlRequest({
+            url: `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
+            method: "POST",
+            headers: buildHeaders(session),
+            body: verifyBody,
+            cookie: cookie,
+        });
 
         logs.push(`   Response: ${JSON.stringify(verifyResponse.data)}`);
 
@@ -262,7 +365,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         await delay(1500, 2500);
 
-        // STEP 5: Complete Challenge (USE SAME MACHINE ID!)
+        // STEP 5: Complete Challenge
         logs.push("🔄 Step 5: Completing challenge...");
 
         const step5Metadata = {
@@ -273,20 +376,22 @@ app.post("/api/change-birthdate", async (req, res) => {
         };
         logs.push(`   Metadata: ${JSON.stringify(step5Metadata)}`);
 
-        const completeResponse = await client.post("https://apis.roblox.com/challenge/v1/continue", {
-            challengeId: continueData.challengeId,
-            challengeType: "twostepverification",
-            challengeMetadata: JSON.stringify(step5Metadata),
+        const completeResponse = await curlRequest({
+            url: "https://apis.roblox.com/challenge/v1/continue",
+            method: "POST",
+            headers: buildHeaders(session),
+            body: {
+                challengeId: continueData.challengeId,
+                challengeType: "twostepverification",
+                challengeMetadata: JSON.stringify(step5Metadata),
+            },
+            cookie: cookie,
         });
 
         logs.push(`   Response: ${JSON.stringify(completeResponse.data)}`);
 
         if (completeResponse.status !== 200) {
             logs.push(`❌ Step 5 failed: ${completeResponse.status}`);
-            if (completeResponse.data?.challengeType === "blocksession" || 
-                JSON.stringify(completeResponse.data).includes("AutomatedTampering")) {
-                logs.push("🚫 SESSION BLOCKED - Possible TLS fingerprint or header mismatch");
-            }
             return res.status(500).json({
                 success: false,
                 error: `Challenge completion failed: ${completeResponse.status}`,
@@ -294,7 +399,7 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
-        // Check for blocksession even with 200 status
+        // Check for blocksession
         if (completeResponse.data?.challengeType === "blocksession" ||
             JSON.stringify(completeResponse.data).includes("Denied")) {
             logs.push("🚫 Step 5 returned blocksession!");
@@ -309,10 +414,9 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         await delay(2000, 3000);
 
-        // STEP 6: Final Birthdate Change (USE SAME MACHINE ID!)
+        // STEP 6: Final Birthdate Change
         logs.push("🔄 Step 6: Final birthdate change...");
 
-        // Build challenge metadata for final request (base64 encoded)
         const finalMetadata = {
             rememberDevice: false,
             actionType: "Generic",
@@ -323,16 +427,24 @@ app.post("/api/change-birthdate", async (req, res) => {
         
         logs.push(`   Challenge Metadata (base64): ${finalMetadataBase64}`);
 
-        // Add challenge headers to the client
-        client.defaults.headers["rblx-challenge-id"] = continueData.challengeId;
-        client.defaults.headers["rblx-challenge-type"] = "twostepverification";
-        client.defaults.headers["rblx-challenge-metadata"] = finalMetadataBase64;
+        // Add challenge headers
+        const finalHeaders = buildHeaders(session, {
+            "rblx-challenge-id": continueData.challengeId,
+            "rblx-challenge-type": "twostepverification",
+            "rblx-challenge-metadata": finalMetadataBase64,
+        });
 
-        const finalResponse = await client.post("https://users.roblox.com/v1/birthdate", {
-            birthMonth: parseInt(birthMonth),
-            birthDay: parseInt(birthDay),
-            birthYear: parseInt(birthYear),
-            password: password,
+        const finalResponse = await curlRequest({
+            url: "https://users.roblox.com/v1/birthdate",
+            method: "POST",
+            headers: finalHeaders,
+            body: {
+                birthMonth: parseInt(birthMonth),
+                birthDay: parseInt(birthDay),
+                birthYear: parseInt(birthYear),
+                password: password,
+            },
+            cookie: cookie,
         });
 
         logs.push(`   Response: ${JSON.stringify(finalResponse.data)}`);
@@ -368,11 +480,13 @@ app.post("/api/change-birthdate", async (req, res) => {
 
 // Health check
 app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", message: "Server running" });
+    res.json({ status: "ok", message: "Server running with curl-impersonate" });
 });
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-    console.log(`📁 Using curl-impersonate for Chrome 120 TLS fingerprint`);
+    console.log(`🔒 Using curl-impersonate for Chrome 120 TLS fingerprint`);
+    console.log(`📁 Place index.html in a 'public' folder`);
+    console.log(`⚠️  Make sure curl_chrome120 is in your PATH`);
 });
