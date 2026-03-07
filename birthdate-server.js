@@ -1,4 +1,4 @@
-// birthdate-server.js - Exact match to official Roblox API
+// birthdate-server.js - Fixed base64 decoding for challengeMetadata
 
 const express = require("express");
 const cors = require("cors");
@@ -174,7 +174,6 @@ app.post("/api/change-birthdate", async (req, res) => {
         await delay(1000, 2000);
 
         // Step 2: Trigger birthdate change
-        // Body: {"birthMonth":3,"birthDay":1,"birthYear":2014}
         logs.push("🔄 Step 2: Trigger birthdate change...");
         const changeRes = await curlRequest({ 
             url: "https://users.roblox.com/v1/birthdate",
@@ -224,28 +223,34 @@ app.post("/api/change-birthdate", async (req, res) => {
         logs.push(`   Challenge ID: ${challengeId}`);
         logs.push(`   Challenge Type: ${challengeType}`);
 
+        // FIX: Decode base64 challengeMetadata before parsing
+        let initialMetadata;
+        try {
+            const decodedMetadata = Buffer.from(challengeMetadata, 'base64').toString('utf8');
+            initialMetadata = JSON.parse(decodedMetadata);
+            logs.push(`   Decoded metadata: ${JSON.stringify(initialMetadata)}`);
+        } catch (e) {
+            logs.push(`⚠️ Failed to decode metadata: ${e.message}`);
+            initialMetadata = {};
+        }
+
         await delay(1500, 2500);
 
         // Step 3: Continue challenge
-        // Body format from your capture:
-        // {"challengeID":"us-central-...","challengeMetadata":"{\"userId\":\"...\",\"challengeId\":\"...\",\"browserTrackerId\":\"...\"}","challengeType":"chef"}
         logs.push("🔄 Step 3: Continue challenge...");
-        
-        // Parse the initial metadata to get userId and browserTrackerId
-        const initialMetadata = JSON.parse(challengeMetadata);
         
         const contRes = await curlRequest({ 
             url: "https://apis.roblox.com/challenge/v1/continue", 
             method: "POST", 
             headers: buildHeaders(session), 
             body: { 
-                challengeID: challengeId,  // Capital D
+                challengeID: challengeId,
                 challengeMetadata: JSON.stringify({
                     userId: initialMetadata.userId,
-                    challengeId: challengeId,  // lowercase d
+                    challengeId: challengeId,
                     browserTrackerId: initialMetadata.browserTrackerId || "1772875017937003"
                 }),
-                challengeType: challengeType  // "chef"
+                challengeType: challengeType
             }, 
             cookie 
         });
@@ -271,8 +276,6 @@ app.post("/api/change-birthdate", async (req, res) => {
         await delay(2000, 3500);
 
         // Step 4: Verify password
-        // URL: https://twostepverification.roblox.com/v1/users/{userId}/challenges/password/verify
-        // Body: {"challengeId":"...","actionType":"Generic","code":"password"}
         logs.push("🔄 Step 4: Verify password...");
         const verifyRes = await curlRequest({ 
             url: `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`, 
@@ -280,8 +283,8 @@ app.post("/api/change-birthdate", async (req, res) => {
             headers: buildHeaders(session), 
             body: { 
                 challengeId: innerChallengeId, 
-                actionType: actionType,  // "Generic"
-                code: password  // Using "code" not "password"
+                actionType: actionType,
+                code: password
             }, 
             cookie 
         });
