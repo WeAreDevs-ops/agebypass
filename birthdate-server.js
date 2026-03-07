@@ -174,7 +174,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         // Step 2: Trigger
         logs.push("🔄 Step 2: Trigger...");
-        const changeRes = await curlRequest({ url: "https://accountinformation.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
+        const changeRes = await curlRequest({ url: "https://users.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
         
         if (changeRes.status === 200) {
             logs.push("✅ Step 2: Success!");
@@ -246,7 +246,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         logs.push("🔄 Step 6: Final...");
         const finalMetadata = Buffer.from(JSON.stringify({ rememberDevice: false, actionType: "Generic", verificationToken, challengeId: metadata.challengeId })).toString("base64");
         
-        const finalRes = await curlRequest({ url: "https://accountinformation.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session, { "rblx-challenge-id": contData.challengeId, "rblx-challenge-type": "twostepverification", "rblx-challenge-metadata": finalMetadata }), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
+        const finalRes = await curlRequest({ url: "https://users.roblox.com/v1/birthdate", method: "POST", headers: buildHeaders(session, { "rblx-challenge-id": contData.challengeId, "rblx-challenge-type": "twostepverification", "rblx-challenge-metadata": finalMetadata }), body: { birthMonth: parseInt(birthMonth), birthDay: parseInt(birthDay), birthYear: parseInt(birthYear), password }, cookie });
 
         if (finalRes.status !== 200) {
             logs.push(`❌ Step 6 failed: ${finalRes.status}`);
