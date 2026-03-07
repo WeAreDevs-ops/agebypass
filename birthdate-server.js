@@ -1,3 +1,5 @@
+// birthdate-server.js - Fixed with gzip decompression support
+
 const express = require("express");
 const cors = require("cors");
 const { spawn } = require("child_process");
@@ -43,7 +45,7 @@ function buildHeaders(session, extra = {}) {
         "User-Agent": session.fp.ua,
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
+        // Removed "Accept-Encoding": "gzip, deflate, br" - let curl handle it
         "Origin": "https://www.roblox.com",
         "Referer": "https://www.roblox.com/my/account#!/info",
         "sec-ch-ua": session.fp.secChUa,
@@ -65,9 +67,21 @@ function curlRequest(opts) {
         const { url, method = "GET", headers = {}, body = null, cookie = null } = opts;
         
         const curlPath = fs.existsSync(CURL_BINARY) ? CURL_BINARY : "curl";
-        const args = ["--silent", "--show-error", "--location", "--http1.1", "--request", method, "--url", url];
         
-        Object.entries(headers).forEach(([k, v]) => { if (v != null) args.push("--header", `${k}: ${v}`); });
+        // Added --compressed flag to handle gzip responses
+        const args = [
+            "--silent", 
+            "--show-error", 
+            "--location", 
+            "--http1.1",
+            "--compressed",  // <-- HANDLES GZIP AUTOMATICALLY
+            "--request", method, 
+            "--url", url
+        ];
+        
+        Object.entries(headers).forEach(([k, v]) => { 
+            if (v != null) args.push("--header", `${k}: ${v}`); 
+        });
         
         if (cookie) {
             const robloxCookie = cookie.startsWith(".ROBLOSECURITY=") ? cookie : `.ROBLOSECURITY=${cookie}`;
@@ -75,6 +89,7 @@ function curlRequest(opts) {
         }
         
         if (body) args.push("--data", JSON.stringify(body));
+        
         args.push("--dump-header", "-", "--write-out", "\nHTTP_CODE:%{http_code}");
         
         const proc = spawn(curlPath, args, { env: process.env });
@@ -83,22 +98,48 @@ function curlRequest(opts) {
         proc.stdout.on("data", d => stdout += d.toString());
         proc.stderr.on("data", d => stderr += d.toString());
         proc.on("error", reject);
+        
         proc.on("close", code => {
             if (code !== 0) return reject(new Error(`curl failed: ${stderr}`));
+            
             try {
                 const parts = stdout.split("HTTP_CODE:");
                 const headerBody = parts[0];
                 const status = parseInt(parts[1]?.trim() || "0");
-                const headerEnd = headerBody.indexOf("\r\n\r\n");
-                const headers = {};
-                headerBody.substring(0, headerEnd).split("\r\n").forEach(line => {
+                
+                // Find header/body separator
+                let headerEnd = headerBody.indexOf("\r\n\r\n");
+                if (headerEnd === -1) {
+                    headerEnd = headerBody.indexOf("\n\n"); // Unix style
+                }
+                if (headerEnd === -1) {
+                    throw new Error("Cannot find end of headers");
+                }
+                
+                const headerSection = headerBody.substring(0, headerEnd);
+                const body = headerBody.substring(headerEnd + 4);
+                
+                // Parse headers
+                const responseHeaders = {};
+                headerSection.split(/\r?\n/).forEach(line => {
                     if (line.includes(":")) {
                         const [k, ...v] = line.split(":");
-                        headers[k.toLowerCase().trim()] = v.join(":").trim();
+                        responseHeaders[k.toLowerCase().trim()] = v.join(":").trim();
                     }
                 });
-                const body = headerBody.substring(headerEnd + 4);
-                resolve({ status, headers, body, data: body ? JSON.parse(body) : null });
+                
+                // Parse JSON body
+                let data = null;
+                if (body && body.trim()) {
+                    try {
+                        data = JSON.parse(body);
+                    } catch (e) {
+                        console.log("Body parse error, raw:", body.substring(0, 200));
+                        throw e;
+                    }
+                }
+                
+                resolve({ status, headers: responseHeaders, body, data });
             } catch (e) {
                 reject(new Error(`Parse error: ${e.message}`));
             }
