@@ -17,7 +17,7 @@ const BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
     "Origin": "https://www.roblox.com",
-    "Referer": "https://www.roblox.com/",
+    "Referer": "https://www.roblox.com/my/account",
     "sec-ch-ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
