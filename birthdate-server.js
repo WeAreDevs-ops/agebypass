@@ -10,34 +10,112 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public")); // Serve index.html from public folder
 
-const BROWSER_HEADERS = {
-    "Content-Type": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Origin": "https://www.roblox.com",
-    "Referer": "https://www.roblox.com/my/account",
-    "sec-ch-ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-site",
-    "Connection": "keep-alive",
-};
+// Generate consistent fingerprint values that persist across the session
+function generateFingerprint() {
+    // Generate a consistent 16-character hex string for machine ID
+    return Array.from({length: 16}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+}
 
-// All requests go direct (residential IP from localhost/VPS)
-async function robloxRequest(url, options = {}) {
+// Store fingerprints per request session
+const sessionFingerprints = new Map();
+
+// Get or create fingerprint for a request
+function getFingerprint(cookie) {
+    if (!sessionFingerprints.has(cookie)) {
+        sessionFingerprints.set(cookie, {
+            machineId: generateFingerprint(),
+            secChUa: '"Not A(Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            secChUaPlatform: '"Windows"',
+            secChUaMobile: "?0",
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        });
+    }
+    return sessionFingerprints.get(cookie);
+}
+
+// Build headers with consistent fingerprint
+function buildHeaders(cookie, csrfToken = null, machineId = null, fingerprint = null) {
+    const fp = fingerprint || getFingerprint(cookie);
+    
+    const headers = {
+        "Content-Type": "application/json",
+        "User-Agent": fp.userAgent,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Origin": "https://www.roblox.com",
+        "Referer": "https://www.roblox.com/",
+        "sec-ch-ua": fp.secChUa,
+        "sec-ch-ua-mobile": fp.secChUaMobile,
+        "sec-ch-ua-platform": fp.secChUaPlatform,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "Connection": "keep-alive",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    };
+
+    // Add cookie
+    const roblosecurity = cookie.startsWith(".ROBLOSECURITY=")
+        ? cookie
+        : `.ROBLOSECURITY=${cookie}`;
+    headers["Cookie"] = roblosecurity;
+
+    // Add CSRF token if provided
+    if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken;
+    }
+
+    // Add machine ID if provided (from previous response)
+    if (machineId) {
+        headers["roblox-machine-id"] = machineId;
+    }
+
+    return headers;
+}
+
+// All requests go direct with consistent fingerprinting
+async function robloxRequest(url, options = {}, cookie = null, machineId = null) {
     console.log(`[Roblox Request] ${options.method || "GET"} ${url}`);
+    
+    // Build consistent headers
+    const headers = buildHeaders(cookie, options.headers?.["x-csrf-token"], machineId);
+    
+    // Merge with any additional headers from options
+    const finalHeaders = {
+        ...headers,
+        ...options.headers,
+    };
+
+    // Remove undefined values
+    Object.keys(finalHeaders).forEach(key => {
+        if (finalHeaders[key] === undefined || finalHeaders[key] === null) {
+            delete finalHeaders[key];
+        }
+    });
+
+    console.log(`[Request Headers] ${JSON.stringify(finalHeaders, null, 2)}`);
+
     const response = await fetch(url, {
         ...options,
-        headers: {
-            ...BROWSER_HEADERS,
-            ...options.headers,
-        },
+        headers: finalHeaders,
     });
-    return response;
+
+    // Capture response headers including roblox-machine-id
+    const responseHeaders = {};
+    response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+    });
+    
+    console.log(`[Response Headers] ${JSON.stringify(responseHeaders, null, 2)}`);
+    
+    // Return both response and headers
+    return {
+        response,
+        headers: responseHeaders,
+        machineId: responseHeaders["roblox-machine-id"] || machineId
+    };
 }
 
 // Delay helper - random delay between min and max ms to mimic human behavior
@@ -63,17 +141,36 @@ app.post("/api/change-birthdate", async (req, res) => {
             ? cookie
             : `.ROBLOSECURITY=${cookie}`;
 
+        // Get or create fingerprint for this session
+        const fingerprint = getFingerprint(cookie);
+        logs.push(`🔐 Session fingerprint initialized`);
+        logs.push(`   Machine ID: ${fingerprint.machineId}`);
+        logs.push(`   Sec-CH-UA: ${fingerprint.secChUa}`);
+
+        let currentMachineId = fingerprint.machineId;
+
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
 
-        const csrf1 = await robloxRequest("https://users.roblox.com/v1/description", {
-            method: "POST",
-            headers: {
-                Cookie: roblosecurity,
+        const csrfResult = await robloxRequest(
+            "https://users.roblox.com/v1/description",
+            {
+                method: "POST",
+                headers: {
+                    "x-csrf-token": "fetch" // Some endpoints accept this to force token return
+                }
             },
-        });
+            cookie,
+            currentMachineId
+        );
 
-        const csrfToken = csrf1.headers.get("x-csrf-token");
+        const csrfToken = csrfResult.response.headers.get("x-csrf-token");
+        
+        // Update machine ID from response if provided
+        if (csrfResult.machineId) {
+            currentMachineId = csrfResult.machineId;
+            logs.push(`   Received Machine ID: ${currentMachineId}`);
+        }
 
         if (!csrfToken) {
             return res.status(403).json({
@@ -91,12 +188,11 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 2: Trigger Challenge
         logs.push("🔄 Step 2: Sending birthdate change request...");
 
-        const changeRequest = await robloxRequest(
+        const changeResult = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "POST",
                 headers: {
-                    Cookie: roblosecurity,
                     "x-csrf-token": csrfToken,
                 },
                 body: JSON.stringify({
@@ -106,7 +202,16 @@ app.post("/api/change-birthdate", async (req, res) => {
                     password: password,
                 }),
             },
+            cookie,
+            currentMachineId
         );
+
+        const changeRequest = changeResult.response;
+
+        // Update machine ID from response if provided
+        if (changeResult.machineId) {
+            currentMachineId = changeResult.machineId;
+        }
 
         if (changeRequest.status === 200) {
             logs.push("✅ Step 2: Birthdate changed without challenge!");
@@ -164,13 +269,12 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 3: Continue Challenge (First)
         logs.push("🔄 Step 3: Continuing challenge...");
 
-        const continueChallenge1 = await robloxRequest(
+        const continueResult1 = await robloxRequest(
             "https://apis.roblox.com/challenge/v1/continue",
             {
                 method: "POST",
                 headers: {
                     "x-csrf-token": csrfToken,
-                    Cookie: roblosecurity,
                 },
                 body: JSON.stringify({
                     challengeId,
@@ -178,7 +282,16 @@ app.post("/api/change-birthdate", async (req, res) => {
                     challengeMetadata,
                 }),
             },
+            cookie,
+            currentMachineId
         );
+
+        const continueChallenge1 = continueResult1.response;
+
+        // Update machine ID from response if provided
+        if (continueResult1.machineId) {
+            currentMachineId = continueResult1.machineId;
+        }
 
         if (continueChallenge1.status !== 200) {
             const errorText = await continueChallenge1.text();
@@ -222,17 +335,25 @@ app.post("/api/change-birthdate", async (req, res) => {
         console.log(`[Step 4 Request Body] ${step4Body}`);
         logs.push(`   Step 4 Request Body: ${step4Body}`);
 
-        const verifyPassword = await robloxRequest(
+        const verifyResult = await robloxRequest(
             `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
             {
                 method: "POST",
                 headers: {
                     "x-csrf-token": csrfToken,
-                    Cookie: roblosecurity,
                 },
                 body: step4Body,
             },
+            cookie,
+            currentMachineId
         );
+
+        const verifyPassword = verifyResult.response;
+
+        // Update machine ID from response if provided
+        if (verifyResult.machineId) {
+            currentMachineId = verifyResult.machineId;
+        }
 
         const step4ResponseText = await verifyPassword.text();
         const step4Headers = {};
@@ -287,13 +408,12 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Step 5 Metadata: ${JSON.stringify(step5Metadata)}`);
 
-        const finalChallenge = await robloxRequest(
+        const finalResult = await robloxRequest(
             "https://apis.roblox.com/challenge/v1/continue",
             {
                 method: "POST",
                 headers: {
                     "x-csrf-token": csrfToken,
-                    Cookie: roblosecurity,
                 },
                 body: JSON.stringify({
                     challengeId: challenge1Data.challengeId,
@@ -301,7 +421,16 @@ app.post("/api/change-birthdate", async (req, res) => {
                     challengeMetadata: JSON.stringify(step5Metadata),
                 }),
             },
+            cookie,
+            currentMachineId
         );
+
+        const finalChallenge = finalResult.response;
+
+        // Update machine ID from response if provided
+        if (finalResult.machineId) {
+            currentMachineId = finalResult.machineId;
+        }
 
         if (finalChallenge.status !== 200) {
             const errorText = await finalChallenge.text();
@@ -343,25 +472,29 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         logs.push(`   Step 6 Challenge Metadata (base64): ${step6ChallengeMetadata}`);
 
-        const retryBirthdate = await robloxRequest(
+        // Build headers with all challenge headers AND consistent fingerprint
+        const step6Headers = buildHeaders(cookie, csrfToken, currentMachineId);
+        step6Headers["rblx-challenge-id"] = challenge1Data.challengeId;
+        step6Headers["rblx-challenge-type"] = "twostepverification";
+        step6Headers["rblx-challenge-metadata"] = step6ChallengeMetadata;
+
+        const retryResult = await robloxRequest(
             "https://users.roblox.com/v1/birthdate",
             {
                 method: "PATCH",
-                headers: {
-                    Cookie: roblosecurity,
-                    "x-csrf-token": csrfToken,
-                    "rblx-challenge-id": challenge1Data.challengeId,
-                    "rblx-challenge-type": "twostepverification",
-                    "rblx-challenge-metadata": step6ChallengeMetadata,
-                },
+                headers: step6Headers,
                 body: JSON.stringify({
                     birthMonth: parseInt(birthMonth),
                     birthDay: parseInt(birthDay),
                     birthYear: parseInt(birthYear),
                     password: password,
                 }),
-            }
+            },
+            cookie,
+            currentMachineId
         );
+
+        const retryBirthdate = retryResult.response;
 
         if (retryBirthdate.status !== 200) {
             const errorText = await retryBirthdate.text();
