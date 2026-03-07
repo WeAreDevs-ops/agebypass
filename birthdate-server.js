@@ -1,10 +1,12 @@
 // birthdate-server.js - Node.js Backend for Roblox Birthdate Changer
-// Using curl-impersonate via child_process for Chrome TLS fingerprint
-// Install dependencies: npm install express cors
+// With automatic curl-impersonate download for Railway deployment
 
 const express = require("express");
 const cors = require("cors");
-const { spawn } = require("child_process");
+const { spawn, exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const https = require("https");
 
 const app = express();
 
@@ -14,6 +16,64 @@ app.use(express.static("public"));
 
 // Store session data
 const sessions = new Map();
+
+// curl-impersonate path
+const CURL_IMPERSONATE_PATH = "/tmp/curl_chrome120";
+
+// Download file from URL
+function downloadFile(url, dest) {
+    return new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(dest);
+        https.get(url, (response) => {
+            if (response.statusCode !== 200) {
+                reject(new Error(`Download failed: ${response.statusCode}`));
+                return;
+            }
+            response.pipe(file);
+            file.on("finish", () => {
+                file.close();
+                resolve();
+            });
+        }).on("error", (err) => {
+            fs.unlink(dest, () => {});
+            reject(err);
+        });
+    });
+}
+
+// Setup curl-impersonate
+async function setupCurlImpersonate() {
+    // Check if already exists
+    if (fs.existsSync(CURL_IMPERSONATE_PATH)) {
+        console.log(`✅ curl-impersonate already exists at ${CURL_IMPERSONATE_PATH}`);
+        return;
+    }
+
+    console.log("⬇️ Downloading curl-impersonate for Linux x64...");
+    
+    try {
+        const downloadUrl = "https://github.com/lwthiker/curl-impersonate/releases/download/v0.6.1/curl-impersonate-v0.6.1.x86_64-linux-gnu.tar.gz";
+        const tarPath = "/tmp/curl-impersonate.tar.gz";
+        
+        // Download tarball
+        await downloadFile(downloadUrl, tarPath);
+        console.log("📦 Downloaded tarball");
+        
+        // Extract using system tar
+        await new Promise((resolve, reject) => {
+            exec(`cd /tmp && tar -xzf curl-impersonate.tar.gz && chmod +x curl_chrome120`, (error) => {
+                if (error) reject(error);
+                else resolve();
+            });
+        });
+        
+        console.log("✅ curl-impersonate extracted and ready");
+        
+    } catch (error) {
+        console.error("❌ Failed to setup curl-impersonate:", error.message);
+        console.log("⚠️ Will fallback to native fetch (may be detected by Roblox)");
+    }
+}
 
 // Get or create session
 function getSession(cookie) {
@@ -44,7 +104,11 @@ function curlRequest(options) {
             cookie = null,
         } = options;
 
-        // Build curl-impersonate command
+        // Check if curl-impersonate exists
+        const curlPath = fs.existsSync(CURL_IMPERSONATE_PATH) 
+            ? CURL_IMPERSONATE_PATH 
+            : "curl"; // Fallback to system curl
+
         const args = [
             "--silent",
             "--show-error",
@@ -78,8 +142,6 @@ function curlRequest(options) {
         args.push("--dump-header", "-");
         args.push("--write-out", "\nHTTP_CODE:%{http_code}");
 
-        // Spawn curl-impersonate process
-        const curlPath = process.env.CURL_IMPERSONATE || "curl_chrome120";
         const proc = spawn(curlPath, args, {
             env: { ...process.env },
         });
@@ -95,36 +157,44 @@ function curlRequest(options) {
             stderr += data.toString();
         });
 
+        proc.on("error", (error) => {
+            reject(new Error(`Failed to spawn curl: ${error.message}`));
+        });
+
         proc.on("close", (code) => {
             if (code !== 0) {
                 return reject(new Error(`curl exited with code ${code}: ${stderr}`));
             }
 
-            // Parse response
-            const parts = stdout.split("HTTP_CODE:");
-            const headersAndBody = parts[0];
-            const httpCode = parseInt(parts[1]?.trim() || "0");
+            try {
+                // Parse response
+                const parts = stdout.split("HTTP_CODE:");
+                const headersAndBody = parts[0];
+                const httpCode = parseInt(parts[1]?.trim() || "0");
 
-            // Split headers and body
-            const headerEnd = headersAndBody.indexOf("\r\n\r\n");
-            const headerSection = headersAndBody.substring(0, headerEnd);
-            const body = headersAndBody.substring(headerEnd + 4);
+                // Split headers and body
+                const headerEnd = headersAndBody.indexOf("\r\n\r\n");
+                const headerSection = headersAndBody.substring(0, headerEnd);
+                const body = headersAndBody.substring(headerEnd + 4);
 
-            // Parse headers
-            const responseHeaders = {};
-            headerSection.split("\r\n").forEach(line => {
-                if (line.includes(":")) {
-                    const [key, ...valueParts] = line.split(":");
-                    responseHeaders[key.toLowerCase().trim()] = valueParts.join(":").trim();
-                }
-            });
+                // Parse headers
+                const responseHeaders = {};
+                headerSection.split("\r\n").forEach(line => {
+                    if (line.includes(":")) {
+                        const [key, ...valueParts] = line.split(":");
+                        responseHeaders[key.toLowerCase().trim()] = valueParts.join(":").trim();
+                    }
+                });
 
-            resolve({
-                status: httpCode,
-                headers: responseHeaders,
-                body: body,
-                data: body ? JSON.parse(body) : null,
-            });
+                resolve({
+                    status: httpCode,
+                    headers: responseHeaders,
+                    body: body,
+                    data: body ? JSON.parse(body) : null,
+                });
+            } catch (parseError) {
+                reject(new Error(`Failed to parse response: ${parseError.message}`));
+            }
         });
     });
 }
@@ -151,17 +221,14 @@ function buildHeaders(session, extraHeaders = {}) {
         "Pragma": "no-cache",
     };
 
-    // Add CSRF token if available
     if (session.csrfToken) {
         headers["x-csrf-token"] = session.csrfToken;
     }
 
-    // Add machine ID if available
     if (session.machineId) {
         headers["roblox-machine-id"] = session.machineId;
     }
 
-    // Merge extra headers
     Object.assign(headers, extraHeaders);
 
     return headers;
@@ -189,7 +256,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         const session = getSession(cookie);
         
         logs.push(`🔐 Session initialized`);
-        logs.push(`   Using curl-impersonate (Chrome 120 TLS fingerprint)`);
+        logs.push(`   Using: ${fs.existsSync(CURL_IMPERSONATE_PATH) ? 'curl-impersonate (Chrome TLS)' : 'system curl'}`);
 
         // STEP 1: Get CSRF Token
         logs.push("🔄 Step 1: Getting CSRF token...");
@@ -216,7 +283,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         await delay(1000, 2000);
 
-        // STEP 2: Trigger Challenge (CAPTURE MACHINE ID HERE!)
+        // STEP 2: Trigger Challenge
         logs.push("🔄 Step 2: Sending birthdate change request...");
 
         const changeResponse = await curlRequest({
@@ -232,16 +299,12 @@ app.post("/api/change-birthdate", async (req, res) => {
             cookie: cookie,
         });
 
-        // Capture machine ID from response
         const machineId = changeResponse.headers["roblox-machine-id"];
         if (machineId) {
             session.machineId = machineId;
             logs.push(`✅ Machine ID LOCKED: ${machineId}`);
-        } else {
-            logs.push("⚠️ Warning: No machine ID in Step 2 response");
         }
 
-        // Check if success (no challenge needed)
         if (changeResponse.status === 200) {
             logs.push("✅ Step 2: Birthdate changed without challenge!");
             return res.json({
@@ -252,9 +315,8 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
-        // If not 403, it's an error
         if (changeResponse.status !== 403) {
-            logs.push(`❌ Step 2 failed: ${changeResponse.status} - ${JSON.stringify(changeResponse.data)}`);
+            logs.push(`❌ Step 2 failed: ${changeResponse.status}`);
             return res.status(500).json({
                 success: false,
                 error: `Unexpected response: ${changeResponse.status}`,
@@ -262,7 +324,6 @@ app.post("/api/change-birthdate", async (req, res) => {
             });
         }
 
-        // Extract challenge headers
         const challengeId = changeResponse.headers["rblx-challenge-id"];
         const challengeType = changeResponse.headers["rblx-challenge-type"];
         const challengeMetadata = changeResponse.headers["rblx-challenge-metadata"];
@@ -289,16 +350,12 @@ app.post("/api/change-birthdate", async (req, res) => {
             url: "https://apis.roblox.com/challenge/v1/continue",
             method: "POST",
             headers: buildHeaders(session),
-            body: {
-                challengeId,
-                challengeType,
-                challengeMetadata,
-            },
+            body: { challengeId, challengeType, challengeMetadata },
             cookie: cookie,
         });
 
         if (continueResponse.status !== 200) {
-            logs.push(`❌ Step 3 failed: ${continueResponse.status} - ${JSON.stringify(continueResponse.data)}`);
+            logs.push(`❌ Step 3 failed: ${continueResponse.status}`);
             return res.status(500).json({
                 success: false,
                 error: `Challenge continue failed: ${continueResponse.status}`,
@@ -308,10 +365,7 @@ app.post("/api/change-birthdate", async (req, res) => {
 
         const continueData = continueResponse.data;
         logs.push("✅ Step 3: Challenge continued");
-        logs.push(`   New Challenge ID: ${continueData.challengeId}`);
-        logs.push(`   New Challenge Type: ${continueData.challengeType}`);
-
-        // Parse metadata
+        
         const metadata = JSON.parse(continueData.challengeMetadata);
         const userId = metadata.userId;
         const innerChallengeId = metadata.challengeId;
@@ -324,18 +378,15 @@ app.post("/api/change-birthdate", async (req, res) => {
         // STEP 4: Verify Password
         logs.push("🔄 Step 4: Verifying password...");
 
-        const verifyBody = {
-            challengeId: innerChallengeId,
-            actionType: 7,
-            code: password,
-        };
-        logs.push(`   Request Body: ${JSON.stringify(verifyBody)}`);
-
         const verifyResponse = await curlRequest({
             url: `https://twostepverification.roblox.com/v1/users/${userId}/challenges/password/verify`,
             method: "POST",
             headers: buildHeaders(session),
-            body: verifyBody,
+            body: {
+                challengeId: innerChallengeId,
+                actionType: 7,
+                code: password,
+            },
             cookie: cookie,
         });
 
@@ -345,14 +396,14 @@ app.post("/api/change-birthdate", async (req, res) => {
             logs.push(`❌ Step 4 failed: ${verifyResponse.status}`);
             return res.status(500).json({
                 success: false,
-                error: `Password verification failed: ${verifyResponse.status}`,
+                error: `Password verification failed`,
                 logs,
             });
         }
 
         const verificationToken = verifyResponse.data.verificationToken;
         if (!verificationToken) {
-            logs.push("❌ No verification token received");
+            logs.push("❌ No verification token");
             return res.status(500).json({
                 success: false,
                 error: "No verification token",
@@ -361,7 +412,6 @@ app.post("/api/change-birthdate", async (req, res) => {
         }
 
         logs.push("✅ Step 4: Password verified");
-        logs.push(`   Token: ${verificationToken.substring(0, 20)}...`);
 
         await delay(1500, 2500);
 
@@ -374,7 +424,6 @@ app.post("/api/change-birthdate", async (req, res) => {
             verificationToken: verificationToken,
             challengeId: innerChallengeId,
         };
-        logs.push(`   Metadata: ${JSON.stringify(step5Metadata)}`);
 
         const completeResponse = await curlRequest({
             url: "https://apis.roblox.com/challenge/v1/continue",
@@ -394,12 +443,11 @@ app.post("/api/change-birthdate", async (req, res) => {
             logs.push(`❌ Step 5 failed: ${completeResponse.status}`);
             return res.status(500).json({
                 success: false,
-                error: `Challenge completion failed: ${completeResponse.status}`,
+                error: `Challenge completion failed`,
                 logs,
             });
         }
 
-        // Check for blocksession
         if (completeResponse.data?.challengeType === "blocksession" ||
             JSON.stringify(completeResponse.data).includes("Denied")) {
             logs.push("🚫 Step 5 returned blocksession!");
@@ -424,10 +472,7 @@ app.post("/api/change-birthdate", async (req, res) => {
             challengeId: innerChallengeId,
         };
         const finalMetadataBase64 = Buffer.from(JSON.stringify(finalMetadata)).toString("base64");
-        
-        logs.push(`   Challenge Metadata (base64): ${finalMetadataBase64}`);
 
-        // Add challenge headers
         const finalHeaders = buildHeaders(session, {
             "rblx-challenge-id": continueData.challengeId,
             "rblx-challenge-type": "twostepverification",
@@ -480,13 +525,22 @@ app.post("/api/change-birthdate", async (req, res) => {
 
 // Health check
 app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", message: "Server running with curl-impersonate" });
+    res.json({ 
+        status: "ok", 
+        curlImpersonate: fs.existsSync(CURL_IMPERSONATE_PATH),
+        message: "Server running" 
+    });
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-    console.log(`🔒 Using curl-impersonate for Chrome 120 TLS fingerprint`);
-    console.log(`📁 Place index.html in a 'public' folder`);
-    console.log(`⚠️  Make sure curl_chrome120 is in your PATH`);
-});
+// Initialize and start server
+async function startServer() {
+    await setupCurlImpersonate();
+    
+    const PORT = process.env.PORT || 8080;
+    app.listen(PORT, "0.0.0.0", () => {
+        console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+        console.log(`🔒 curl-impersonate: ${fs.existsSync(CURL_IMPERSONATE_PATH) ? '✅ Ready' : '❌ Not available (using system curl)'}`);
+    });
+}
+
+startServer();
