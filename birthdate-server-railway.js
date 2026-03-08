@@ -311,10 +311,37 @@ async function cdpFetch(cookie, url, method, body, session, logs = null) {
         // Remove the default pass-through listener so it doesn't race with our handler
         cdp.removeAllListeners('Fetch.requestPaused');
 
+        // Safety timeout - reject if intercept never fires within 15s
+        const timeout = setTimeout(() => {
+            cdp.off('Fetch.requestPaused', handler);
+            cdp.on('Fetch.requestPaused', async (p) => {
+                cdp.send('Fetch.continueRequest', { requestId: p.requestId }).catch(() => {});
+            });
+            reject(new Error('cdpFetch timeout - intercept never fired'));
+        }, 15000);
+
         const handler = async (params) => {
-            // Not our target URL, or it's an OPTIONS preflight - pass through normally
-            if (!params.request.url.startsWith(targetBase) || params.request.method === 'OPTIONS') {
+            // Not our target URL - pass through normally
+            if (!params.request.url.startsWith(targetBase)) {
                 cdp.send('Fetch.continueRequest', { requestId: params.requestId }).catch(() => {});
+                return;
+            }
+
+            // OPTIONS preflight - fulfill with a fake success so the browser sends the real POST
+            // (Chromium on Railway can't reach Roblox externally, so we can't let it pass through)
+            if (params.request.method === 'OPTIONS') {
+                await cdp.send('Fetch.fulfillRequest', {
+                    requestId: params.requestId,
+                    responseCode: 204,
+                    responseHeaders: [
+                        { name: 'Access-Control-Allow-Origin', value: 'https://www.roblox.com' },
+                        { name: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+                        { name: 'Access-Control-Allow-Headers', value: 'Content-Type, x-csrf-token, x-bound-auth-token, roblox-machine-id, X-Requested-With, Accept' },
+                        { name: 'Access-Control-Allow-Credentials', value: 'true' },
+                        { name: 'Access-Control-Max-Age', value: '86400' }
+                    ],
+                    body: ''
+                }).catch(() => {});
                 return;
             }
 
@@ -361,8 +388,10 @@ async function cdpFetch(cookie, url, method, body, session, logs = null) {
 
                 let data = null;
                 try { data = JSON.parse(responseBody); } catch (e) {}
+                clearTimeout(timeout);
                 resolve({ status: response.status, headers: responseHeaders, body: responseBody, data });
             }).catch(async (err) => {
+                clearTimeout(timeout);
                 await cdp.send('Fetch.failRequest', { requestId: params.requestId, errorReason: 'Failed' }).catch(() => {});
                 reject(err);
             });
