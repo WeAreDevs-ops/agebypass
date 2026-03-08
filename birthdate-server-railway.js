@@ -255,11 +255,16 @@ async function getSession(cookie, logs) {
             csrfRes.headers.forEach((v, k) => { allHeaders[k] = v; });
             log(`CSRF bootstrap headers: ${JSON.stringify(allHeaders)}`, logs);
             const csrfFromHeader = csrfRes.headers.get('x-csrf-token');
+            const machineIdFromHeader = csrfRes.headers.get('roblox-machine-id');
             if (csrfFromHeader) {
                 session.csrfToken = csrfFromHeader;
                 log(`CSRF bootstrapped successfully`, logs);
             } else {
                 log(`CSRF header missing from response`, logs);
+            }
+            if (machineIdFromHeader) {
+                session.machineId = machineIdFromHeader;
+                log(`Machine ID captured from bootstrap`, logs);
             }
         } catch (e) {
             log(`CSRF bootstrap error: ${e.message}`, logs);
@@ -294,7 +299,7 @@ async function getSession(cookie, logs) {
 // cdpFetch: triggers a fetch from within the live Roblox page so Roblox's JS attaches
 // a fresh x-bound-auth-token, then CDP intercepts it, captures all headers,
 // and fulfills it via Node.js fetch (bypasses Chromium's sandboxed network on Railway).
-async function cdpFetch(cookie, url, method, body, session) {
+async function cdpFetch(cookie, url, method, body, session, logs = null) {
     const page = session.page;
     const cdp = session.cdp;
     if (!page || !cdp) throw new Error('No active browser session');
@@ -323,6 +328,7 @@ async function cdpFetch(cookie, url, method, body, session) {
 
             // Capture all tokens Roblox's JS attached to this request
             const reqHeaders = params.request.headers || {};
+            log(`cdpFetch: intercepted ${params.request.method} ${params.request.url} - bound=${!!reqHeaders['x-bound-auth-token']}, csrf=${!!reqHeaders['x-csrf-token']}`, logs);
             if (reqHeaders['x-bound-auth-token']) session.boundAuthToken = reqHeaders['x-bound-auth-token'];
             if (reqHeaders['x-csrf-token']) session.csrfToken = reqHeaders['x-csrf-token'];
             if (reqHeaders['roblox-machine-id']) session.machineId = reqHeaders['roblox-machine-id'];
@@ -365,6 +371,8 @@ async function cdpFetch(cookie, url, method, body, session) {
         // Register our handler before triggering
         cdp.on('Fetch.requestPaused', handler);
 
+        log(`cdpFetch: triggering ${method} ${url}`, logs);
+
         // Trigger fetch from inside the live Roblox page - Roblox's JS interceptor attaches x-bound-auth-token
         page.evaluate(async (url, method, body, csrfToken, challengeHeaders) => {
             const headers = {
@@ -382,7 +390,7 @@ async function cdpFetch(cookie, url, method, body, session) {
 }
 
 async function apiRequest(cookie, url, method, body, session, logs) {
-    return cdpFetch(cookie, url, method, body, session);
+    return cdpFetch(cookie, url, method, body, session, logs);
 }
 
 // API endpoint
