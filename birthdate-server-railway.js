@@ -301,86 +301,48 @@ async function getSession(cookie, logs) {
     }
 }
 
-// Make API request
+// Make API request - uses Node fetch directly (no Puppeteer browser context)
 async function apiRequest(cookie, url, method, body, session, logs) {
-    let page = null;
-    
-    try {
-        const browser = await initBrowser();
-        page = await browser.newPage();
-        
-        const cookieValue = cookie.startsWith(".ROBLOSECURITY=") ? cookie.substring(15) : cookie;
-        
-        // Set cookie
-        await page.goto('https://www.roblox.com/', { waitUntil: 'domcontentloaded' });
-        await page.setCookie({
-            name: '.ROBLOSECURITY',
-            value: cookieValue,
-            domain: '.roblox.com',
-            path: '/',
-            httpOnly: true,
-            secure: true,
-            sameSite: 'Lax'
-        });
-        
-        // Build headers
-        const headers = {
-            'Content-Type': 'application/json;charset=utf-8',
-            'Accept': 'application/json, text/plain, */*',
-            'Origin': 'https://www.roblox.com',
-            'Referer': 'https://www.roblox.com/my/account#!/info',
-            'X-Requested-With': 'XMLHttpRequest'
-        };
-        
-        if (session.csrfToken) headers['x-csrf-token'] = session.csrfToken;
-        if (session.boundAuthToken) headers['x-bound-auth-token'] = session.boundAuthToken;
-        if (session.machineId) headers['roblox-machine-id'] = session.machineId;
-        
-        // Make request via page.evaluate
-        const result = await page.evaluate(async (url, method, body, headers) => {
-            try {
-                const res = await fetch(url, {
-                    method,
-                    credentials: 'include',
-                    headers,
-                    body: body ? JSON.stringify(body) : undefined
-                });
-                
-                const h = {};
-                res.headers.forEach((v, k) => h[k] = v);
-                
-                return {
-                    ok: res.ok,
-                    status: res.status,
-                    headers: h,
-                    body: await res.text()
-                };
-            } catch (err) {
-                return { error: err.message };
-            }
-        }, url, method, body, headers);
-        
-        if (result.error) {
-            throw new Error(`Fetch error: ${result.error}`);
-        }
-        
-        // Parse response
-        let data = null;
-        try {
-            data = JSON.parse(result.body);
-        } catch (e) {}
-        
-        // Update tokens
-        if (result.headers['x-csrf-token']) session.csrfToken = result.headers['x-csrf-token'];
-        if (result.headers['roblox-machine-id']) session.machineId = result.headers['roblox-machine-id'];
-        
-        return { ...result, data };
-        
-    } finally {
-        if (page) {
-            try { await page.close(); } catch (e) {}
-        }
+    // Build cookie header
+    const cookieValue = cookie.startsWith(".ROBLOSECURITY=") ? cookie : `.ROBLOSECURITY=${cookie}`;
+
+    const headers = {
+        'Content-Type': 'application/json;charset=utf-8',
+        'Accept': 'application/json, text/plain, */*',
+        'Origin': 'https://www.roblox.com',
+        'Referer': 'https://www.roblox.com/my/account#!/info',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': cookieValue,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    };
+
+    if (session.csrfToken) headers['x-csrf-token'] = session.csrfToken;
+    if (session.boundAuthToken) headers['x-bound-auth-token'] = session.boundAuthToken;
+    if (session.machineId) headers['roblox-machine-id'] = session.machineId;
+
+    // Apply challenge headers if present (used in final retry step)
+    if (session.challengeHeaders) {
+        Object.assign(headers, session.challengeHeaders);
     }
+
+    const response = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined
+    });
+
+    const h = {};
+    response.headers.forEach((v, k) => { h[k] = v; });
+
+    const bodyText = await response.text();
+    let data = null;
+    try { data = JSON.parse(bodyText); } catch (e) {}
+
+    // Update session tokens from response headers
+    if (h['x-csrf-token']) session.csrfToken = h['x-csrf-token'];
+    if (h['roblox-machine-id']) session.machineId = h['roblox-machine-id'];
+
+    return { ok: response.ok, status: response.status, headers: h, body: bodyText, data };
 }
 
 // API endpoint
