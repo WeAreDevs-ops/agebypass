@@ -233,31 +233,43 @@ async function getSession(cookie, logs) {
         session.valid = true;
         log('Cookie valid, session established', logs);
 
-        // Bootstrap CSRF token: POST to any auth endpoint with no token.
-        // Roblox returns 403 with x-csrf-token in the response header - this is the standard pattern.
+        // Bootstrap CSRF token: POST to auth endpoint with no token.
+        // Roblox returns 403 with x-csrf-token in the response header - standard pattern.
         log('Bootstrapping CSRF token...', logs);
+        const cookieHeader = cookie.startsWith('.ROBLOSECURITY=') ? cookie : `.ROBLOSECURITY=${cookie}`;
         try {
-            const cookieHeader = cookie.startsWith('.ROBLOSECURITY=') ? cookie : `.ROBLOSECURITY=${cookie}`;
-            const csrfRes = await fetch('https://auth.roblox.com/v2/logout', {
+            const csrfRes = await fetch('https://auth.roblox.com/v1/authentication-ticket', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'application/json;charset=utf-8',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Origin': 'https://www.roblox.com',
+                    'Referer': 'https://www.roblox.com/',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Cookie': cookieHeader
                 }
             });
+            log(`CSRF bootstrap response: ${csrfRes.status}`, logs);
+            // Log all response headers for debugging
+            const allHeaders = {};
+            csrfRes.headers.forEach((v, k) => { allHeaders[k] = v; });
+            log(`CSRF bootstrap headers: ${JSON.stringify(allHeaders)}`, logs);
             const csrfFromHeader = csrfRes.headers.get('x-csrf-token');
             if (csrfFromHeader) {
                 session.csrfToken = csrfFromHeader;
-                log(`CSRF bootstrapped from auth endpoint`, logs);
+                log(`CSRF bootstrapped successfully`, logs);
+            } else {
+                log(`CSRF header missing from response`, logs);
             }
         } catch (e) {
             log(`CSRF bootstrap error: ${e.message}`, logs);
         }
 
-        // Also try extracting from page as fallback
+        // Fallback: extract from page JS
         if (!session.csrfToken) {
+            log('Trying page token extraction fallback...', logs);
             const pageTokens = await extractTokens(page);
-            if (pageTokens.csrf) session.csrfToken = pageTokens.csrf;
+            if (pageTokens.csrf) { session.csrfToken = pageTokens.csrf; log('CSRF from page', logs); }
             if (pageTokens.machineId) session.machineId = pageTokens.machineId;
         }
 
