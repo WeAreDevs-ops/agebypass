@@ -312,8 +312,8 @@ async function cdpFetch(cookie, url, method, body, session, logs = null) {
         cdp.removeAllListeners('Fetch.requestPaused');
 
         const handler = async (params) => {
-            // Not our target - pass through normally
-            if (!params.request.url.startsWith(targetBase)) {
+            // Not our target URL, or it's an OPTIONS preflight - pass through normally
+            if (!params.request.url.startsWith(targetBase) || params.request.method === 'OPTIONS') {
                 cdp.send('Fetch.continueRequest', { requestId: params.requestId }).catch(() => {});
                 return;
             }
