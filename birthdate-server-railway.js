@@ -247,8 +247,12 @@ async function getSession(cookie, logs) {
         if (pageTokens.bound) session.boundAuthToken = pageTokens.bound;
         if (pageTokens.machineId) session.machineId = pageTokens.machineId;
 
+        // Assign page + cdp to session BEFORE warm-up so cdpFetch can use them
+        session.page = page;
+        session.cdp = cdp;
+
         // Fire a GET via cdpFetch to warm up token generation.
-        // This triggers Roblox's JS to generate x-bound-auth-token for the first time.
+        // Triggers Roblox's JS to generate x-bound-auth-token for the first time.
         // Node.js fulfills the actual network call so Railway's Chromium sandbox isn't a problem.
         log('Triggering API call to capture token...', logs);
         try {
@@ -259,10 +263,6 @@ async function getSession(cookie, logs) {
         await randomDelay(1500, 2500);
 
         log(`Session status: CSRF=${session.csrfToken ? 'Y' : 'N'}, Bound=${session.boundAuthToken ? 'Y' : 'N'}, Machine=${session.machineId ? 'Y' : 'N'}`, logs);
-
-        // Store page + cdp on session - stays open for all API calls
-        session.page = page;
-        session.cdp = cdp;
         return session;
 
     } catch (error) {
@@ -293,7 +293,7 @@ async function cdpFetch(cookie, url, method, body, session) {
             }
 
             // Got our request - remove handler so it doesn't fire again
-            cdp.removeListener('Fetch.requestPaused', handler);
+            cdp.off('Fetch.requestPaused', handler);
 
             // Capture fresh tokens Roblox's JS attached
             const reqHeaders = params.request.headers || {};
