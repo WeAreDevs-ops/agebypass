@@ -247,16 +247,15 @@ async function getSession(cookie, logs) {
         if (pageTokens.bound) session.boundAuthToken = pageTokens.bound;
         if (pageTokens.machineId) session.machineId = pageTokens.machineId;
 
-        // Fire a GET to warm up token generation via Roblox's own JS
+        // Fire a GET via cdpFetch to warm up token generation.
+        // This triggers Roblox's JS to generate x-bound-auth-token for the first time.
+        // Node.js fulfills the actual network call so Railway's Chromium sandbox isn't a problem.
         log('Triggering API call to capture token...', logs);
-        await page.evaluate(async () => {
-            try {
-                await fetch('https://users.roblox.com/v1/birthdate', {
-                    method: 'GET',
-                    credentials: 'include'
-                });
-            } catch (e) {}
-        });
+        try {
+            await cdpFetch(cookie, 'https://users.roblox.com/v1/birthdate', 'GET', null, session);
+        } catch (e) {
+            log(`Warm-up fetch error (non-fatal): ${e.message}`, logs);
+        }
         await randomDelay(1500, 2500);
 
         log(`Session status: CSRF=${session.csrfToken ? 'Y' : 'N'}, Bound=${session.boundAuthToken ? 'Y' : 'N'}, Machine=${session.machineId ? 'Y' : 'N'}`, logs);
@@ -275,57 +274,102 @@ async function getSession(cookie, logs) {
     // NOTE: No finally close - page stays open intentionally
 }
 
-// Make API request via the persistent Puppeteer page
-// Roblox's own JS bundle running in the page auto-generates a fresh x-bound-auth-token per call
-// CDP listener in getSession captures each fresh token as it's sent
-async function apiRequest(cookie, url, method, body, session, logs) {
+// cdpFetch: triggers a fetch from within the live Roblox page so Roblox's JS attaches
+// a fresh x-bound-auth-token, then CDP intercepts the outgoing request, captures all headers,
+// and fulfills it via Node.js fetch (bypassing Chromium's sandboxed network on Railway).
+async function cdpFetch(cookie, url, method, body, session) {
     const page = session.page;
-    if (!page) throw new Error('No active browser page - session missing');
+    const cdp = session.cdp;
+    if (!page || !cdp) throw new Error('No active browser session');
 
-    const result = await page.evaluate(async (url, method, body, csrfToken, challengeHeaders) => {
-        try {
+    const cookieValue = cookie.startsWith('.ROBLOSECURITY=') ? cookie : `.ROBLOSECURITY=${cookie}`;
+
+    return new Promise((resolve, reject) => {
+        const handler = async (params) => {
+            // Only intercept our target URL - let everything else through
+            if (!params.request.url.startsWith(url.split('?')[0])) {
+                cdp.send('Fetch.continueRequest', { requestId: params.requestId }).catch(() => {});
+                return;
+            }
+
+            // Got our request - remove handler so it doesn't fire again
+            cdp.removeListener('Fetch.requestPaused', handler);
+
+            // Capture fresh tokens Roblox's JS attached
+            const reqHeaders = params.request.headers || {};
+            if (reqHeaders['x-bound-auth-token']) {
+                session.boundAuthToken = reqHeaders['x-bound-auth-token'];
+            }
+            if (reqHeaders['x-csrf-token']) session.csrfToken = reqHeaders['x-csrf-token'];
+            if (reqHeaders['roblox-machine-id']) session.machineId = reqHeaders['roblox-machine-id'];
+
+            // Build headers for Node.js fetch - use what Roblox's JS built + add cookie + challenge headers
+            const nodeHeaders = {
+                ...reqHeaders,
+                'Cookie': cookieValue
+            };
+            if (session.challengeHeaders) Object.assign(nodeHeaders, session.challengeHeaders);
+
+            // Make the actual HTTP call via Node.js (unrestricted network)
+            fetch(url, {
+                method,
+                headers: nodeHeaders,
+                body: body ? JSON.stringify(body) : undefined
+            }).then(async (response) => {
+                const responseBody = await response.text();
+                const responseHeaders = {};
+                response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+
+                // Update CSRF from response if Roblox rotated it
+                if (responseHeaders['x-csrf-token']) session.csrfToken = responseHeaders['x-csrf-token'];
+                if (responseHeaders['roblox-machine-id']) session.machineId = responseHeaders['roblox-machine-id'];
+
+                // Return response back to the page via CDP so Roblox's JS isn't left hanging
+                await cdp.send('Fetch.fulfillRequest', {
+                    requestId: params.requestId,
+                    responseCode: response.status,
+                    responseHeaders: Object.entries(responseHeaders).map(([name, value]) => ({ name, value: String(value) })),
+                    body: Buffer.from(responseBody).toString('base64')
+                }).catch(() => {});
+
+                let data = null;
+                try { data = JSON.parse(responseBody); } catch (e) {}
+                resolve({ status: response.status, headers: responseHeaders, body: responseBody, data });
+            }).catch(async (err) => {
+                await cdp.send('Fetch.failRequest', { requestId: params.requestId, errorReason: 'Failed' }).catch(() => {});
+                reject(err);
+            });
+        };
+
+        // Register before triggering so we don't miss the interception
+        cdp.on('Fetch.requestPaused', handler);
+
+        // Trigger fetch from inside the Roblox page - Roblox's JS interceptor attaches x-bound-auth-token
+        page.evaluate(async (url, method, body, csrfToken, challengeHeaders) => {
             const headers = {
                 'Content-Type': 'application/json;charset=utf-8',
                 'Accept': 'application/json, text/plain, */*',
                 'X-Requested-With': 'XMLHttpRequest'
             };
             if (csrfToken) headers['x-csrf-token'] = csrfToken;
-            // Apply challenge headers for final retry step if present
             if (challengeHeaders) Object.assign(headers, challengeHeaders);
+            try {
+                await fetch(url, { method, credentials: 'include', headers, body: body ? JSON.stringify(body) : undefined });
+            } catch (e) {}
+            // page.evaluate may throw when CDP fulfills request - that's expected and fine
+        }, url, method, body, session.csrfToken, session.challengeHeaders || null).catch(() => {});
+    });
+}
 
-            // Roblox's JS interceptor auto-attaches x-bound-auth-token to this fetch
-            const res = await fetch(url, {
-                method,
-                credentials: 'include',
-                headers,
-                body: body ? JSON.stringify(body) : undefined
-            });
-
-            const h = {};
-            res.headers.forEach((v, k) => { h[k] = v; });
-
-            return { status: res.status, headers: h, body: await res.text() };
-        } catch (err) {
-            return { error: err.message };
-        }
-    }, url, method, body, session.csrfToken, session.challengeHeaders || null);
-
-    if (result.error) throw new Error(`Fetch error: ${result.error}`);
-
-    let data = null;
-    try { data = JSON.parse(result.body); } catch (e) {}
-
-    // Update session tokens from response headers
-    if (result.headers['x-csrf-token']) session.csrfToken = result.headers['x-csrf-token'];
-    if (result.headers['roblox-machine-id']) session.machineId = result.headers['roblox-machine-id'];
-
-    return { ...result, data };
+async function apiRequest(cookie, url, method, body, session, logs) {
+    return cdpFetch(cookie, url, method, body, session);
 }
 
 // API endpoint
 app.post("/api/change-birthdate", async (req, res) => {
     const logs = [];
-    
+    let session = null;
+
     try {
         const { cookie, password, birthMonth, birthDay, birthYear } = req.body;
         
@@ -337,7 +381,7 @@ app.post("/api/change-birthdate", async (req, res) => {
         
         // Step 1: Get session
         log('Step 1: Getting session...', logs);
-        const session = await getSession(cookie, logs);
+        session = await getSession(cookie, logs);
         
         if (!session.valid) {
             return res.status(401).json({ success: false, error: "Invalid cookie", logs });
