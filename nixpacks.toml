@@ -1,10 +1,10 @@
-# Nixpacks configuration for Railway deployment
-# This ensures Puppeteer/Chrome works correctly
+# Nixpacks configuration for Railway deployment with Puppeteer/Chrome
 
 [phases.setup]
 nixPkgs = [
     "nodejs_20",
     "npm-9_x",
+    # Chrome dependencies
     "fontconfig",
     "freetype",
     "nss",
@@ -22,7 +22,6 @@ nixPkgs = [
     "dbus",
     "expat",
     "libdrm",
-    "libxkbcommon",
     "mesa",
     "alsa-lib",
     "cups",
@@ -30,19 +29,22 @@ nixPkgs = [
     "cairo",
     "gdk-pixbuf",
     "gtk3",
-    "libgbm"
+    "libgbm",
+    # Additional fonts
+    "noto-fonts",
+    "noto-fonts-cjk"
 ]
 
 [phases.build]
 cmds = [
     "npm install",
-    "npx puppeteer browsers install chrome"
+    "npx puppeteer browsers install chrome || true"
 ]
 
 [phases.setup.env]
 PUPPETEER_CACHE_DIR = "/app/.cache/puppeteer"
-PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
-PUPPETEER_EXECUTABLE_PATH = "/app/.cache/puppeteer/chrome/linux-*/chrome-linux/chrome"
+PUPPETEER_SKIP_DOWNLOAD = "false"
+PUPPETEER_DOWNLOAD_HOST = "https://storage.googleapis.com"
 
 [start]
-cmd = "node birthdate-server.js"
+cmd = "node birthdate-server-railway.js"

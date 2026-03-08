@@ -2,11 +2,11 @@
   "name": "roblox-birthdate-changer-puppeteer",
   "version": "2.0.0",
   "description": "Web application to change Roblox birthdate using Puppeteer for stealth",
-  "main": "birthdate-server-puppeteer.js",
+  "main": "birthdate-server-railway.js",
   "scripts": {
-    "start": "node birthdate-server-puppeteer.js",
-    "dev": "nodemon birthdate-server-puppeteer.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "start": "node birthdate-server-railway.js",
+    "dev": "nodemon birthdate-server-railway.js",
+    "postinstall": "npx puppeteer browsers install chrome || echo 'Chrome install failed, will use system'"
   },
   "keywords": [
     "roblox",
