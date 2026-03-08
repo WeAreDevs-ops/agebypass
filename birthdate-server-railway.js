@@ -161,54 +161,54 @@ async function extractTokens(page) {
     });
 }
 
-// Get fresh session with auto-generated token
+// Get fresh session - keeps page OPEN so Roblox JS stays alive for all API calls
 async function getSession(cookie, logs) {
     const session = {
         csrfToken: null,
         boundAuthToken: null,
         machineId: null,
-        valid: false
+        valid: false,
+        page: null,   // persistent page for all subsequent API calls
+        cdp: null     // CDP session for token capture
     };
-    
+
     let page = null;
-    
+
     try {
         const browser = await initBrowser();
         page = await browser.newPage();
-        
-        // Set up request interception BEFORE navigation
+
+        // Set up CDP interception BEFORE navigation
+        // Captures fresh x-bound-auth-token on EVERY request (Roblox regenerates it per-call)
         const cdp = await page.target().createCDPSession();
         await cdp.send('Fetch.enable', {
             patterns: [{ urlPattern: '*roblox.com*', requestStage: 'Request' }]
         });
-        
+
         cdp.on('Fetch.requestPaused', async (params) => {
             const headers = params.request.headers || {};
-            
-            if (headers['x-bound-auth-token'] && !session.boundAuthToken) {
+
+            // Always update - token is fresh per call
+            if (headers['x-bound-auth-token']) {
                 session.boundAuthToken = headers['x-bound-auth-token'];
-                log(`Captured bound token: ${session.boundAuthToken.substring(0, 30)}...`, logs);
+                log(`Bound token updated for request`, logs);
             }
-            if (headers['x-csrf-token']) {
-                session.csrfToken = headers['x-csrf-token'];
-            }
-            if (headers['roblox-machine-id']) {
-                session.machineId = headers['roblox-machine-id'];
-            }
-            
+            if (headers['x-csrf-token']) session.csrfToken = headers['x-csrf-token'];
+            if (headers['roblox-machine-id']) session.machineId = headers['roblox-machine-id'];
+
             await cdp.send('Fetch.continueRequest', { requestId: params.requestId });
         });
-        
+
         // Parse cookie
         const cookieValue = cookie.startsWith(".ROBLOSECURITY=") ? cookie.substring(15) : cookie;
-        
+
         // Step 1: Navigate to Roblox
         log('Navigating to Roblox...', logs);
-        await page.goto('https://www.roblox.com/', { 
+        await page.goto('https://www.roblox.com/', {
             waitUntil: 'domcontentloaded',
             timeout: 20000
         });
-        
+
         // Set cookie
         await page.setCookie({
             name: '.ROBLOSECURITY',
@@ -219,130 +219,107 @@ async function getSession(cookie, logs) {
             secure: true,
             sameSite: 'Lax'
         });
-        
-        // Step 2: Go to account page
+
+        // Step 2: Go to account page - this loads Roblox's full JS bundle
         log('Going to account page...', logs);
-        await page.goto('https://www.roblox.com/my/account#!/info', { 
+        await page.goto('https://www.roblox.com/my/account#!/info', {
             waitUntil: 'networkidle0',
             timeout: 30000
         });
-        
-        // Wait for JS
+
+        // Wait for JS to fully initialize
         await randomDelay(2000, 3000);
-        
+
         // Check if logged in
         const url = page.url();
         if (url.includes('/login')) {
             log('Cookie invalid - redirected to login', logs);
+            await page.close();
             return session;
         }
-        
+
         session.valid = true;
         log('Cookie valid, session established', logs);
-        
-        // Step 3: Extract tokens from page
+
+        // Extract tokens from page
         const pageTokens = await extractTokens(page);
         if (pageTokens.csrf) session.csrfToken = pageTokens.csrf;
         if (pageTokens.bound) session.boundAuthToken = pageTokens.bound;
         if (pageTokens.machineId) session.machineId = pageTokens.machineId;
-        
-        // Step 4: Trigger API call to capture token from headers
-        if (!session.boundAuthToken) {
-            log('Triggering API call to capture token...', logs);
-            
-            await page.evaluate(async () => {
-                try {
-                    await fetch('https://users.roblox.com/v1/birthdate', {
-                        method: 'GET',
-                        credentials: 'include'
-                    });
-                } catch (e) {}
-            });
-            
-            await randomDelay(1500, 2500);
-        }
-        
-        // Try clicking birthdate button
-        if (!session.boundAuthToken) {
-            log('Trying to click birthdate button...', logs);
-            
-            const selectors = [
-                '[data-testid="birthdate-edit-button"]',
-                '.birthdate-edit-button',
-                '.account-info-section button',
-                'button:has-text("Edit")'
-            ];
-            
-            for (const sel of selectors) {
-                try {
-                    const btn = await page.$(sel);
-                    if (btn) {
-                        await btn.click();
-                        log(`Clicked: ${sel}`, logs);
-                        await randomDelay(1500, 2500);
-                        break;
-                    }
-                } catch (e) {}
-            }
-        }
-        
-        // Final status
+
+        // Fire a GET to warm up token generation via Roblox's own JS
+        log('Triggering API call to capture token...', logs);
+        await page.evaluate(async () => {
+            try {
+                await fetch('https://users.roblox.com/v1/birthdate', {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+            } catch (e) {}
+        });
+        await randomDelay(1500, 2500);
+
         log(`Session status: CSRF=${session.csrfToken ? 'Y' : 'N'}, Bound=${session.boundAuthToken ? 'Y' : 'N'}, Machine=${session.machineId ? 'Y' : 'N'}`, logs);
-        
+
+        // Store page + cdp on session - stays open for all API calls
+        session.page = page;
+        session.cdp = cdp;
         return session;
-        
+
     } catch (error) {
         log(`Session error: ${error.message}`, logs);
+        // Close page on error only
+        if (page) try { await page.close(); } catch (e) {}
         throw error;
-    } finally {
-        if (page) {
-            try { await page.close(); } catch (e) {}
-        }
     }
+    // NOTE: No finally close - page stays open intentionally
 }
 
-// Make API request - uses Node fetch directly (no Puppeteer browser context)
+// Make API request via the persistent Puppeteer page
+// Roblox's own JS bundle running in the page auto-generates a fresh x-bound-auth-token per call
+// CDP listener in getSession captures each fresh token as it's sent
 async function apiRequest(cookie, url, method, body, session, logs) {
-    // Build cookie header
-    const cookieValue = cookie.startsWith(".ROBLOSECURITY=") ? cookie : `.ROBLOSECURITY=${cookie}`;
+    const page = session.page;
+    if (!page) throw new Error('No active browser page - session missing');
 
-    const headers = {
-        'Content-Type': 'application/json;charset=utf-8',
-        'Accept': 'application/json, text/plain, */*',
-        'Origin': 'https://www.roblox.com',
-        'Referer': 'https://www.roblox.com/my/account#!/info',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Cookie': cookieValue,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    };
+    const result = await page.evaluate(async (url, method, body, csrfToken, challengeHeaders) => {
+        try {
+            const headers = {
+                'Content-Type': 'application/json;charset=utf-8',
+                'Accept': 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest'
+            };
+            if (csrfToken) headers['x-csrf-token'] = csrfToken;
+            // Apply challenge headers for final retry step if present
+            if (challengeHeaders) Object.assign(headers, challengeHeaders);
 
-    if (session.csrfToken) headers['x-csrf-token'] = session.csrfToken;
-    if (session.boundAuthToken) headers['x-bound-auth-token'] = session.boundAuthToken;
-    if (session.machineId) headers['roblox-machine-id'] = session.machineId;
+            // Roblox's JS interceptor auto-attaches x-bound-auth-token to this fetch
+            const res = await fetch(url, {
+                method,
+                credentials: 'include',
+                headers,
+                body: body ? JSON.stringify(body) : undefined
+            });
 
-    // Apply challenge headers if present (used in final retry step)
-    if (session.challengeHeaders) {
-        Object.assign(headers, session.challengeHeaders);
-    }
+            const h = {};
+            res.headers.forEach((v, k) => { h[k] = v; });
 
-    const response = await fetch(url, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined
-    });
+            return { status: res.status, headers: h, body: await res.text() };
+        } catch (err) {
+            return { error: err.message };
+        }
+    }, url, method, body, session.csrfToken, session.challengeHeaders || null);
 
-    const h = {};
-    response.headers.forEach((v, k) => { h[k] = v; });
+    if (result.error) throw new Error(`Fetch error: ${result.error}`);
 
-    const bodyText = await response.text();
     let data = null;
-    try { data = JSON.parse(bodyText); } catch (e) {}
+    try { data = JSON.parse(result.body); } catch (e) {}
 
     // Update session tokens from response headers
-    if (h['x-csrf-token']) session.csrfToken = h['x-csrf-token'];
-    if (h['roblox-machine-id']) session.machineId = h['roblox-machine-id'];
+    if (result.headers['x-csrf-token']) session.csrfToken = result.headers['x-csrf-token'];
+    if (result.headers['roblox-machine-id']) session.machineId = result.headers['roblox-machine-id'];
 
-    return { ok: response.ok, status: response.status, headers: h, body: bodyText, data };
+    return { ...result, data };
 }
 
 // API endpoint
@@ -571,6 +548,11 @@ app.post("/api/change-birthdate", async (req, res) => {
         log(`ERROR: ${error.message}`, logs);
         console.error(error);
         res.status(500).json({ success: false, error: error.message, logs });
+    } finally {
+        // Always close the persistent page when request is done
+        if (session && session.page) {
+            try { await session.page.close(); } catch (e) {}
+        }
     }
 });
 
