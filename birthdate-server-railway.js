@@ -200,15 +200,22 @@ async function changeBirthdateViaUI(cookie, password, birthMonth, birthDay, birt
             log(`CSRF bootstrap error: ${e.message}`, logs);
         }
 
-        // 1. Set cookie BEFORE any navigation so it's sent with the first request
-        // Puppeteer allows setCookie before navigation - no need to visit the domain first
-        log('Setting cookie...', logs);
+        // 1. Navigate to roblox.com first (unauthenticated) to establish the domain context
+        log('Loading Roblox domain...', logs);
+        await page.goto('https://www.roblox.com/', { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+        // 2. Inject cookie via both setCookie API and document.cookie (belt + suspenders)
+        log('Injecting cookie...', logs);
         await page.setCookie({
             name: '.ROBLOSECURITY', value: cookieValue, domain: '.roblox.com',
-            path: '/', httpOnly: true, secure: true, sameSite: 'Lax'
+            path: '/', httpOnly: false, secure: true, sameSite: 'None'
         });
+        // Verify cookie was set
+        const cookies = await page.cookies('https://www.roblox.com/');
+        const robloxCookie = cookies.find(c => c.name === '.ROBLOSECURITY');
+        log(`Cookie set: ${robloxCookie ? 'YES (len=' + robloxCookie.value.length + ')' : 'NO - COOKIE MISSING'}`, logs);
 
-        // 2. Go directly to account settings (cookie already attached)
+        // 3. Now navigate to account settings with cookie in jar
         log('Going to account settings...', logs);
         await page.goto('https://www.roblox.com/my/account#!/info', {
             waitUntil: 'networkidle0', timeout: 30000
