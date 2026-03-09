@@ -223,6 +223,23 @@ async function changeBirthdateViaUI(cookie, password, birthMonth, birthDay, birt
         await randomDelay(600, 900);
 
         // 3. Wait for AngularJS to render the birthday button then click it
+        // Dump actual page HTML to verify birthday section is present
+        const pageHTML = await page.content();
+        const hasBirthdayBtn = pageHTML.includes('Change Birthday');
+        const hasBirthdayText = pageHTML.includes('Birthday');
+        const pageUrl = page.url();
+        log(`Page URL: ${pageUrl}`, logs);
+        log(`HTML has 'Change Birthday' button: ${hasBirthdayBtn}`, logs);
+        log(`HTML has 'Birthday' text: ${hasBirthdayText}`, logs);
+        if (!hasBirthdayBtn) {
+            // Show snippet of HTML around any birthday reference, or start of body
+            const idx = pageHTML.toLowerCase().indexOf('birthday');
+            const snippet = idx >= 0 
+                ? pageHTML.substring(Math.max(0, idx-100), idx+300)
+                : pageHTML.substring(0, 500);
+            log(`Page HTML snippet: ${snippet.replace(/\s+/g, ' ')}`, logs);
+        }
+
         log('Waiting for birthday button to render...', logs);
 
         // Use waitForSelector - far more reliable than fixed delays for SPA content
