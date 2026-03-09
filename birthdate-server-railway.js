@@ -76,20 +76,33 @@ function randomDelay(min, max) { return delay(Math.floor(Math.random() * (max - 
 // API subdomains fulfilled via Node.js (Railway Chromium sandbox can't reach these)
 // Proxy ALL roblox API subdomains through Node.js - Railway's Chromium sandbox
 // can't reach any *.roblox.com subdomain except www.roblox.com directly
-const PASSTHROUGH_DOMAINS = [
-    'www.roblox.com',      // page navigation - let Chromium handle
-    'rbxcdn.com',           // static CDN assets
-    'rbx.com',              // short domain
-    'robloxlabs.com',       // labs
-    'ecsv2.roblox.com',    // analytics/metrics pings (not critical)
+const PASSTHROUGH_URLS = [
+    'rbxcdn.com',              // static CDN assets - always passthrough
+    'rbx.com',                 // short domain
+    'robloxlabs.com',          // labs
+    // www.roblox.com pages that are navigation/static (NOT API endpoints)
+    'www.roblox.com/js/',
+    'www.roblox.com/css/',
+    'www.roblox.com/worker-resources/',
+    'www.roblox.com/favicon',
 ];
 
 function isApiCall(url) {
-    // If it's a roblox domain but NOT a passthrough, proxy it through Node.js
-    if (!url.includes('roblox.com') && !url.includes('rbxcdn.com')) return false;
-    // Let passthrough domains pass through
-    if (PASSTHROUGH_DOMAINS.some(d => url.includes(d))) return false;
-    // Everything else (all API subdomains) goes through Node.js
+    if (!url.includes('roblox.com')) return false;
+    // Let static/CDN pass through
+    if (PASSTHROUGH_URLS.some(d => url.includes(d))) return false;
+    // www.roblox.com page navigations pass through (HTML pages, not JSON APIs)
+    if (url.includes('www.roblox.com/') && !url.includes('.json') && 
+        !url.includes('/v1/') && !url.includes('/v2/') && !url.includes('/v3/') &&
+        !url.match(/\.roblox\.com\/[a-z-]+\/[a-z]/)) {
+        const path = url.split('www.roblox.com')[1] || '';
+        // Only pass through actual page navigations
+        if (path === '/' || path.startsWith('/my/account') || path.startsWith('/NewLogin') || 
+            path.startsWith('/home') || path.startsWith('/worker-')) {
+            return false;
+        }
+    }
+    // Everything else (all API subdomains + JSON endpoints) goes through Node.js
     return true;
 }
 
@@ -229,9 +242,15 @@ async function changeBirthdateViaUI(cookie, password, birthMonth, birthDay, birt
         // 3. Now navigate to account settings with cookie in jar
         log('Going to account settings...', logs);
         await page.goto('https://www.roblox.com/my/account#!/info', {
-            waitUntil: 'networkidle0', timeout: 30000
+            waitUntil: 'load', timeout: 30000
         });
-        await randomDelay(2000, 3000);
+        // Wait for Angular to bootstrap ng-view content
+        log('Waiting for Angular to render settings...', logs);
+        await page.waitForFunction(() => {
+            const ngView = document.querySelector('[ng-view], .ng-scope');
+            return ngView && ngView.innerHTML && ngView.innerHTML.length > 100;
+        }, { timeout: 15000 }).catch(() => {});
+        await randomDelay(4000, 5000);
 
         if (page.url().includes('/login')) throw new Error('Cookie invalid');
         log('On account page ✓', logs);
