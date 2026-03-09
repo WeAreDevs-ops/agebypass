@@ -222,55 +222,30 @@ async function changeBirthdateViaUI(cookie, password, birthMonth, birthDay, birt
         await page.evaluate(() => window.scrollBy(0, 500));
         await randomDelay(600, 900);
 
-        // 3. Wait for React to render, then click the Birthday edit (pencil) button
-        log('Waiting for page content to render...', logs);
-        // Wait for the account settings content to appear (React SPA)
-        await page.waitForFunction(() => {
-            const els = [...document.querySelectorAll('*')];
-            return els.some(el => el.children.length === 0 && el.textContent.trim() === 'Birthday');
-        }, { timeout: 15000 }).catch(() => {});
-        await randomDelay(1000, 1500);
+        // 3. Wait for page content to render then click birthday edit
+        log('Waiting for account settings to render...', logs);
+
+        // The settings page is AngularJS (#!/info hash routing) - wait for it to bootstrap
+        await randomDelay(4000, 5000);
 
         log('Clicking birthday edit...', logs);
+        // Exact selector from Roblox HTML: button[aria-label="Change Birthday"]
         const birthdayClicked = await page.evaluate(() => {
-            // Find the "Birthday" text node then walk up to find the row container
-            // The pencil icon button sits next to the Birthday label in the same row
-            const allEls = [...document.querySelectorAll('*')];
-            for (const el of allEls) {
-                if (el.children.length === 0 && el.textContent.trim() === 'Birthday') {
-                    // Walk up max 8 levels to find a container with a button
-                    let container = el.parentElement;
-                    for (let i = 0; i < 8; i++) {
-                        if (!container) break;
-                        // Look for button or icon-edit in this container
-                        const btns = container.querySelectorAll('button, [role="button"], a.edit, .icon-edit, [class*="edit-icon"], [class*="editIcon"]');
-                        if (btns.length > 0) {
-                            btns[0].click();
-                            return `clicked via container at depth ${i}: ${btns[0].outerHTML.substring(0, 100)}`;
-                        }
-                        // Check if this container itself is clickable
-                        if (container.tagName === 'BUTTON' || container.getAttribute('role') === 'button') {
-                            container.click();
-                            return `clicked container itself at depth ${i}`;
-                        }
-                        container = container.parentElement;
-                    }
-                }
-            }
-            // Fallback: find any button whose aria-label or title contains birthday
-            const btns = [...document.querySelectorAll('button, [role="button"]')];
-            for (const btn of btns) {
-                const label = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase();
-                if (label.includes('birthday') || label.includes('birth')) {
-                    btn.click();
-                    return `clicked via aria-label: ${label}`;
-                }
+            const selectors = [
+                'button[aria-label="Change Birthday"]',
+                'button[title="Change Birthday"]',
+                '.account-change-settings-button.btn-generic-edit-sm',
+                'button[data-testid="setting-text-field-edit-btn"]'
+            ];
+            for (const sel of selectors) {
+                const btn = document.querySelector(sel);
+                if (btn) { btn.click(); return sel; }
             }
             return null;
         });
 
-        if (!birthdayClicked) throw new Error('Birthday edit button not found - page may not have rendered yet');
-        log(`Birthday edit clicked: ${birthdayClicked}`, logs);
+        if (!birthdayClicked) throw new Error('Birthday edit button not found');
+        log(`Birthday edit clicked via: ${birthdayClicked}`, logs);
         await randomDelay(1000, 1500);
 
         // 4. "Update Your Birthday" modal - set dropdowns
