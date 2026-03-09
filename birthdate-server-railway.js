@@ -175,6 +175,10 @@ async function setupCDP(page, cookieHeader, logs) {
             if (respHeaders['roblox-machine-id']) tokens.machineId = respHeaders['roblox-machine-id'];
 
             log(`← ${resp.status} ${url.replace('https://', '')}`, logs);
+            // Log key response bodies for debugging
+            if (url.includes('/my/settings/json')) {
+                try { log(`SETTINGS_JSON: ${Buffer.from(body,'base64').toString('utf8').substring(0,600)}`, logs); } catch(e) {}
+            }
 
             await cdp.send('Fetch.fulfillRequest', {
                 requestId,
