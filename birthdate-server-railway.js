@@ -74,14 +74,23 @@ function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 function randomDelay(min, max) { return delay(Math.floor(Math.random() * (max - min + 1)) + min); }
 
 // API subdomains fulfilled via Node.js (Railway Chromium sandbox can't reach these)
-const API_DOMAINS = [
-    'users.roblox.com', 'apis.roblox.com', 'auth.roblox.com',
-    'twostepverification.roblox.com', 'accountsettings.roblox.com',
-    'accountinformation.roblox.com', 'api.roblox.com'
+// Proxy ALL roblox API subdomains through Node.js - Railway's Chromium sandbox
+// can't reach any *.roblox.com subdomain except www.roblox.com directly
+const PASSTHROUGH_DOMAINS = [
+    'www.roblox.com',      // page navigation - let Chromium handle
+    'rbxcdn.com',           // static CDN assets
+    'rbx.com',              // short domain
+    'robloxlabs.com',       // labs
+    'ecsv2.roblox.com',    // analytics/metrics pings (not critical)
 ];
 
 function isApiCall(url) {
-    return API_DOMAINS.some(d => url.includes(d));
+    // If it's a roblox domain but NOT a passthrough, proxy it through Node.js
+    if (!url.includes('roblox.com') && !url.includes('rbxcdn.com')) return false;
+    // Let passthrough domains pass through
+    if (PASSTHROUGH_DOMAINS.some(d => url.includes(d))) return false;
+    // Everything else (all API subdomains) goes through Node.js
+    return true;
 }
 
 // CDP intercept: all API calls go through Node.js fetch, not Chromium's sandboxed network
@@ -97,8 +106,10 @@ async function setupCDP(page, cookieHeader, logs) {
         const { requestId, request } = params;
         const url = request.url;
 
-        // Non-API requests (page navigation, static assets) pass through normally
+        // Non-API requests pass through - but log unexpected roblox subdomains
         if (!isApiCall(url)) {
+            const skip = url.includes('rbxcdn.com') || url.includes('ecsv2.roblox.com') || url.includes('rbx.com') || !url.includes('roblox.com');
+            if (!skip) log(`⚠ PASSTHROUGH: ${request.method} ${url.replace('https://', '').substring(0, 80)}`, logs);
             await cdp.send('Fetch.continueRequest', { requestId }).catch(() => {});
             return;
         }
@@ -266,7 +277,15 @@ async function changeBirthdateViaUI(cookie, password, birthMonth, birthDay, birt
             } catch (e) {}
         }
 
-        if (!birthdaySel) throw new Error('Birthday button never appeared in DOM after 20s');
+        if (!birthdaySel) {
+            // Dump DOM to see what AngularJS actually rendered
+            const domDump = await page.evaluate(() => {
+                const main = document.querySelector('[ng-view], #content, main, .container, body');
+                return (main ? main.innerHTML : document.body.innerHTML).substring(0, 1000);
+            });
+            log(`DOM after timeout: ${domDump.replace(/\s+/g, ' ')}`, logs);
+            throw new Error('Birthday button never appeared in DOM after 20s');
+        }
         log(`Birthday button found: ${birthdaySel}`, logs);
 
         // Small human-like pause before clicking
