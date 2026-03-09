@@ -222,30 +222,33 @@ async function changeBirthdateViaUI(cookie, password, birthMonth, birthDay, birt
         await page.evaluate(() => window.scrollBy(0, 500));
         await randomDelay(600, 900);
 
-        // 3. Wait for page content to render then click birthday edit
-        log('Waiting for account settings to render...', logs);
+        // 3. Wait for AngularJS to render the birthday button then click it
+        log('Waiting for birthday button to render...', logs);
 
-        // The settings page is AngularJS (#!/info hash routing) - wait for it to bootstrap
-        await randomDelay(4000, 5000);
+        // Use waitForSelector - far more reliable than fixed delays for SPA content
+        // The exact selector comes from inspecting the real Roblox HTML
+        let birthdaySel = null;
+        const candidateSelectors = [
+            'button[aria-label="Change Birthday"]',
+            'button[title="Change Birthday"]',
+            'button[data-testid="setting-text-field-edit-btn"]',
+            '.account-change-settings-button.btn-generic-edit-sm'
+        ];
+        for (const sel of candidateSelectors) {
+            try {
+                await page.waitForSelector(sel, { timeout: 20000 });
+                birthdaySel = sel;
+                break;
+            } catch (e) {}
+        }
 
-        log('Clicking birthday edit...', logs);
-        // Exact selector from Roblox HTML: button[aria-label="Change Birthday"]
-        const birthdayClicked = await page.evaluate(() => {
-            const selectors = [
-                'button[aria-label="Change Birthday"]',
-                'button[title="Change Birthday"]',
-                '.account-change-settings-button.btn-generic-edit-sm',
-                'button[data-testid="setting-text-field-edit-btn"]'
-            ];
-            for (const sel of selectors) {
-                const btn = document.querySelector(sel);
-                if (btn) { btn.click(); return sel; }
-            }
-            return null;
-        });
+        if (!birthdaySel) throw new Error('Birthday button never appeared in DOM after 20s');
+        log(`Birthday button found: ${birthdaySel}`, logs);
 
-        if (!birthdayClicked) throw new Error('Birthday edit button not found');
-        log(`Birthday edit clicked via: ${birthdayClicked}`, logs);
+        // Small human-like pause before clicking
+        await randomDelay(500, 900);
+        await page.click(birthdaySel);
+        log('Birthday edit clicked ✓', logs);
         await randomDelay(1000, 1500);
 
         // 4. "Update Your Birthday" modal - set dropdowns
